@@ -101,7 +101,6 @@ textarea { resize: vertical; }
 label.field, div.field { display: flex; flex-direction: column; gap: 3px; font-size: 12px; font-weight: 600; color: var(--muted); }
 label.field > input, label.field > select, label.field > textarea, div.field > div { font-weight: 400; color: var(--text); }
 
-input.swatch { width: 34px; height: 34px; padding: 2px; cursor: pointer; flex: none; }
 .iconbtn {
   width: 34px; height: 34px; padding: 0; flex: none; font-size: 18px;
   background: var(--input-bg); border: 1px solid var(--border); color: var(--text);
@@ -278,6 +277,47 @@ input.picking { outline: 2px solid var(--warn); }
 .iconpicker .ip-msg:empty { display: none; }
 .iconpicker .ip-hint { color: var(--muted); font-size: 11px; margin-top: 6px; }
 
+/* Färgväljare (samma ruta som ikonväljaren) */
+.colorpicker { width: 296px; }
+.colorpicker .ip-group { margin-top: 8px; }
+.cp-grid { display: grid; grid-template-columns: repeat(10, 1fr); gap: 5px; }
+.cp-sw {
+  aspect-ratio: 1; width: 100%; padding: 0; border-radius: 50%;
+  border: 1px solid rgba(0,0,0,.12); box-shadow: inset 0 0 0 1px rgba(255,255,255,.25);
+  transition: transform .1s;
+}
+.cp-sw:hover { transform: scale(1.15); filter: none; }
+.cp-sw.sel { outline: 2px solid var(--text); outline-offset: 2px; }
+.cp-sv {
+  position: relative; height: 140px; border-radius: 8px; cursor: crosshair;
+  touch-action: none; user-select: none; outline-offset: 2px;
+}
+.cp-knob {
+  position: absolute; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%;
+  border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.35), 0 1px 4px rgba(0,0,0,.4); pointer-events: none;
+}
+.cp-hue {
+  -webkit-appearance: none; appearance: none; width: 100%; height: 14px; margin: 10px 0 2px; padding: 0;
+  border: 0; border-radius: 7px; cursor: pointer;
+  background: linear-gradient(to right, #f00 0%, #ff0 16.66%, #0f0 33.33%, #0ff 50%, #00f 66.66%, #f0f 83.33%, #f00 100%);
+}
+.cp-hue::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%;
+  background: #fff; border: 0; box-shadow: 0 0 0 1px rgba(0,0,0,.35), 0 1px 4px rgba(0,0,0,.4);
+}
+.cp-hue::-moz-range-thumb {
+  width: 18px; height: 18px; border-radius: 50%;
+  background: #fff; border: 0; box-shadow: 0 0 0 1px rgba(0,0,0,.35), 0 1px 4px rgba(0,0,0,.4);
+}
+.cp-row { align-items: center; }
+.cp-dot { width: 30px; height: 30px; flex: none; border-radius: 6px; border: 1px solid var(--border); }
+.iconpicker .cp-row input.cp-hex { font-family: ui-monospace, Consolas, monospace; text-transform: uppercase; }
+.cp-hex.bad { border-color: var(--error); }
+
+/* Knappen som öppnar färgväljaren */
+.color-btn { display: inline-flex; align-items: center; gap: 6px; }
+.color-dot { width: 16px; height: 16px; border-radius: 50%; border: 1px solid rgba(0,0,0,.2); flex: none; }
+
 /* Ikoner (Font Awesome eller emoji) */
 .ic { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
 .ic i { width: 1.15em; text-align: center; }
@@ -307,7 +347,18 @@ input.picking { outline: 2px solid var(--warn); }
 .days { display: flex; gap: 2px; }
 .day { padding: 4px 6px; font-size: 12px; background: var(--secondary-bg); color: var(--muted); min-width: 28px; }
 .day.on { background: var(--accent); color: var(--on-accent); }
-.add-flow { display: flex; gap: 6px; margin-top: 4px; }
+.add-flow { display: flex; gap: 6px; margin-top: 4px; align-items: center; flex-wrap: wrap; }
+
+/* Skapa ny kategori/flöde direkt i platsformuläret */
+.quick-new {
+  margin: 8px 0 4px; padding: 10px 12px; border: 1px dashed var(--accent); border-radius: 8px;
+  background: var(--panel-2); display: flex; flex-direction: column; gap: 8px;
+}
+.quick-new .qn-title { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.quick-new .qn-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.quick-new .qn-row input { flex: 1; min-width: 140px; }
+.quick-new .badge { flex: none; }
+.quick-new .hint { margin: 0; }
 
 /* Ändringar */
 .file-info {
@@ -453,3 +504,43 @@ pre.example {
 .pp-carrier-details { margin-top: 2px; padding-left: 4px; }
 /* Ingen horisontell rullning i popupen när den rullar på höjden */
 .leaflet-popup-scrolled { overflow-x: hidden; scrollbar-width: thin; }
+
+/* Upplysning under adressfältet i platsformuläret */
+.addr-hint { margin: -6px 0 10px; color: var(--warn); }
+.addr-hint:empty { display: none; }
+
+/* Uppskattad position (adressen hittades inte exakt) */
+.pmark.approx { position: relative; outline: 2px dashed var(--warn); outline-offset: 2px; }
+.pmark .pm-approx {
+  position: absolute; top: -7px; right: -7px; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--warn); color: #1b1300; font: 700 10px/14px system-ui, sans-serif; text-align: center; text-shadow: none;
+}
+.pmark.small .pm-approx { top: -8px; right: -8px; }
+.tt-approx { color: #c98a00; font-weight: 600; }
+.pp-approx {
+  margin: 6px 0; padding: 6px 8px; border-radius: 6px; font-size: 12px; line-height: 1.45;
+  background: color-mix(in srgb, var(--warn) 16%, transparent); border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+}
+.pp-approx button { margin-top: 4px; }
+.approx-tag { color: var(--warn); }
+
+/* Importresultat */
+.import-log .warn { color: var(--text); margin: 8px 0; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--warn); }
+.import-log .warn strong { color: var(--warn); }
+.import-log .muted { color: var(--muted); }
+
+/* Granskning av dubbletter vid import */
+.dup-bulk { gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+.dup-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; background: var(--panel); }
+.dup-card.undecided { border-color: var(--warn); }
+.dup-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.dup-head .badge { flex: none; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button { border-radius: 0; background: var(--secondary-bg); color: var(--secondary-text); padding: 6px 10px; font-size: 13px; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button.on { background: var(--accent); color: var(--on-accent); }
+.dup-diff { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 4px; table-layout: fixed; }
+.dup-diff th, .dup-diff td { text-align: left; vertical-align: top; padding: 5px 8px; border-bottom: 1px solid var(--border); white-space: pre-line; overflow-wrap: anywhere; }
+.dup-diff thead th { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.dup-diff tbody th { width: 120px; color: var(--muted); font-weight: 600; }
+.dup-diff td.new { background: color-mix(in srgb, var(--accent) 10%, transparent); }

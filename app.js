@@ -109,7 +109,55 @@ function formatPhotonFeature(f) {
   const street = [p.street || p.name, p.housenumber].filter(Boolean).join(' ');
   const main = p.name && p.street && p.name !== p.street ? `${p.name}, ${street}` : (street || p.name || '');
   const place = [p.postcode, p.city || p.town || p.village || p.county].filter(Boolean).join(' ');
-  return { main, place, full: [main, place].filter(Boolean).join(', ') };
+  return {
+    main, place, full: [main, place].filter(Boolean).join(', '),
+    housenumber: p.housenumber || '',
+    type: p.type || '',                 // Photon: house, street, city, district, postcode …
+    isStreet: p.osm_key === 'highway' || p.type === 'street'   // träffen är en hel väg, inte en adresspunkt
+  };
+}
+
+// Husnumret i en adress, t.ex. "Försörjningsvägen 1C, 907 37 Umeå" → "1C"
+function houseNumberOf(addr) {
+  const m = String(addr || '').split(',')[0].trim().match(/\s(\d+\s?[a-zA-Z]?)$/);
+  return m ? m[1].replace(/\s/g, '').toUpperCase() : '';
+}
+
+// Hur exakt en sökträff är: '' = exakt adress, 'street' = bara vägen, 'area' = bara ort/område
+function approxOf(hit, wantedNumber) {
+  const hn = String(hit.housenumber || '').replace(/\s/g, '').toUpperCase();
+  if (hn) return !wantedNumber || hn === wantedNumber ? '' : 'street';
+  if (hit.isStreet) return 'street';
+  if (['city', 'district', 'locality', 'county', 'state', 'country', 'postcode', 'other'].includes(hit.type)) return 'area';
+  return wantedNumber ? 'street' : '';   // t.ex. en namngiven byggnad utan husnummer
+}
+
+// Söker upp en adress och provar enklare varianter om den inte hittas:
+// hela adressen → utan husnummer → utan postnummer → bara orten.
+// Returnerar { lat, lon, approx } eller null.
+async function geocodeWithFallback(addr) {
+  const parts = String(addr).split(',').map(s => s.trim()).filter(Boolean);
+  const first = parts[0] || '';
+  const num = houseNumberOf(addr);
+  const street = num ? first.replace(/\s\d+\s?[a-zA-Z]?$/, '').trim() : first;
+  const rest = parts.slice(1);
+  const restNoZip = rest.map(s => s.replace(/\b\d{3}\s?\d{2}\b/, '').trim()).filter(Boolean);
+  const attempts = [
+    { q: addr },
+    { q: [street, ...rest].join(', ') },
+    { q: [street, ...restNoZip].join(', ') },
+    { q: rest.join(', '), area: true },
+    { q: restNoZip.join(', '), area: true }
+  ].filter((a, i, all) => a.q && all.findIndex(b => b.q === a.q) === i);
+
+  for (const a of attempts) {
+    const hits = await searchAddress(a.q, 1);
+    await new Promise(r => setTimeout(r, 120));   // var snäll mot den fria söktjänsten
+    if (!hits.length) continue;
+    const hit = hits[0];
+    return { lat: hit.lat, lon: hit.lon, approx: a.area ? 'area' : approxOf(hit, num) };
+  }
+  return null;
 }
 
 async function searchAddress(q, limit = 6) {

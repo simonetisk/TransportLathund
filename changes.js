@@ -73,6 +73,7 @@ function describePlaceDiff(b, a) {
   if (b.name !== a.name) lines.push(`Namn: ${b.name} → ${a.name}`);
   if (b.address !== a.address) lines.push(`Adress: ${b.address || '–'} → ${a.address || '–'}`);
   else if (b.lat !== a.lat || b.lon !== a.lon) lines.push('Position ändrad');
+  if (b.approx !== a.approx) lines.push(a.approx ? 'Position: uppskattad' : 'Position: exakt (var uppskattad)');
   if (b.categoryId !== a.categoryId) lines.push(`Kategori: ${(anyCat(b.categoryId) || {}).name || '?'} → ${(anyCat(a.categoryId) || {}).name || '?'}`);
   if (b.note !== a.note) lines.push('Anteckning ändrad');
 

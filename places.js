@@ -6,7 +6,14 @@
 const PLACES_KEY = 'transportlathund.places';
 const FILTERS_KEY = 'transportlathund.filters';
 
-const PALETTE = ['#e74c3c', '#2ecc71', '#3498db', '#f0a020', '#b07cf0', '#1abc9c', '#ff6fb5', '#e6e04a'];
+// Färdiga färger i färgväljaren: en rad mellanpasteller och en rad ljusa pasteller,
+// i ordningen röd, orange, gul, lime, grön, turkos, himmel, blå, lila, rosa.
+const COLOR_PRESETS = [
+  '#f28b82', '#f6ae6b', '#f5d76e', '#b5d96b', '#7fd1a0', '#6fcfc4', '#7cc4f0', '#8ea8f5', '#b39ddb', '#f19ac4',
+  '#fbc4c0', '#fbd3b0', '#fbe9a8', '#dcedb5', '#bfe8cf', '#bde9e4', '#bfe2f8', '#c9d5fb', '#dccff0', '#f8cde2'
+];
+// Färger som nya kategorier/flöden/speditörer får i tur och ordning
+const PALETTE = COLOR_PRESETS.slice(0, 10);
 
 // ---------- Ikoner ----------
 // En ikon sparas som "fa:namn" (Font Awesome, solid) eller som en emoji (äldre data).
@@ -162,8 +169,14 @@ const normPlace = p => ({
   id: str(p.id) || uid(), name: str(p.name), address: str(p.address),
   lat: Number(p.lat), lon: Number(p.lon), categoryId: str(p.categoryId), note: str(p.note),
   contacts: arr(p.contacts).map(normContact),
-  flows: arr(p.flows).map(normPlaceFlow)
+  flows: arr(p.flows).map(normPlaceFlow),
+  // Uppskattad position: '' = exakt, 'street' = bara vägen hittades, 'area' = bara orten/området
+  approx: APPROX_TEXT[p.approx] ? p.approx : ''
 });
+const APPROX_TEXT = {
+  street: 'Husnumret hittades inte i kartdatan, så nålen står på vägen.',
+  area: 'Bara orten eller området hittades, så nålen står ungefär.'
+};
 const validPlace = p => p && p.name && p.lat != null && p.lon != null && isFinite(p.lat) && isFinite(p.lon);
 
 function normalizeData(d) {
@@ -191,15 +204,15 @@ const emptyData = () => ({ categories: [], flows: [], carriers: [], places: [] }
 function defaultData() {
   return {
     categories: [
-      { id: uid(), name: 'Sjukhus', color: '#e74c3c', icon: 'fa:circle-h' },
-      { id: uid(), name: 'Hälsocentral', color: '#2ecc71', icon: 'fa:house-medical' },
-      { id: uid(), name: 'Folktandvård', color: '#3498db', icon: 'fa:tooth' },
-      { id: uid(), name: 'Lager', color: '#f0a020', icon: 'fa:warehouse' }
+      { id: uid(), name: 'Sjukhus', color: '#f28b82', icon: 'fa:circle-h' },
+      { id: uid(), name: 'Hälsocentral', color: '#7fd1a0', icon: 'fa:house-medical' },
+      { id: uid(), name: 'Folktandvård', color: '#7cc4f0', icon: 'fa:tooth' },
+      { id: uid(), name: 'Lager', color: '#f6ae6b', icon: 'fa:warehouse' }
     ],
     flows: [
-      { id: uid(), name: 'Post', color: '#3498db', icon: 'fa:envelope', carrierId: null },
-      { id: uid(), name: 'Paket', color: '#f0a020', icon: 'fa:box-archive', carrierId: null },
-      { id: uid(), name: 'Blod och prover', color: '#e74c3c', icon: 'fa:droplet', carrierId: null }
+      { id: uid(), name: 'Post', color: '#8ea8f5', icon: 'fa:envelope', carrierId: null },
+      { id: uid(), name: 'Paket', color: '#f5d76e', icon: 'fa:box-archive', carrierId: null },
+      { id: uid(), name: 'Blod och prover', color: '#f28b82', icon: 'fa:droplet', carrierId: null }
     ],
     carriers: [],
     places: []
@@ -551,12 +564,22 @@ const placeLayer = (CLUSTERING ? L.markerClusterGroup({
 }) : L.layerGroup()).addTo(map);
 const placeMarkers = {};
 
-function markerIcon(cat) {
+// approx = uppskattad position: streckad kant och ett litet "?"
+function markerIcon(cat, approx) {
   const color = safeColor(cat.color);
+  const ap = approx ? ' approx' : '';
+  const q = approx ? '<span class="pm-approx">?</span>' : '';
   if (!cat.icon) {
-    return L.divIcon({ className: '', html: `<div class="pmark small" style="background:${color}"></div>`, iconSize: [16, 16], iconAnchor: [8, 8], popupAnchor: [0, -8] });
+    return L.divIcon({ className: '', html: `<div class="pmark small${ap}" style="background:${color}">${q}</div>`, iconSize: [16, 16], iconAnchor: [8, 8], popupAnchor: [0, -8] });
   }
-  return L.divIcon({ className: '', html: `<div class="pmark${onColorClass(color)}" style="${colorStyle(color)}">${iconHtml(cat.icon)}</div>`, iconSize: [30, 30], iconAnchor: [15, 15], popupAnchor: [0, -14] });
+  return L.divIcon({ className: '', html: `<div class="pmark${onColorClass(color)}${ap}" style="${colorStyle(color)}">${iconHtml(cat.icon)}${q}</div>`, iconSize: [30, 30], iconAnchor: [15, 15], popupAnchor: [0, -14] });
+}
+
+// Öppna platsen och börja direkt välja exakt position i kartan
+function adjustPosition(p) {
+  map.closePopup();
+  openPlaceEditor(p, 'close');
+  startPlacePick();
 }
 
 function renderPlaceMarkers() {
@@ -564,8 +587,8 @@ function renderPlaceMarkers() {
   Object.keys(placeMarkers).forEach(k => delete placeMarkers[k]);
   const markers = placeData.places.filter(isPlaceShown).map(p => {
     const cat = catById(p.categoryId);
-    return placeMarkers[p.id] = L.marker([p.lat, p.lon], { icon: markerIcon(cat), pane: 'places', catColor: safeColor(cat.color) })
-      .bindTooltip(p.name, { direction: 'top', offset: [0, -12] })
+    return placeMarkers[p.id] = L.marker([p.lat, p.lon], { icon: markerIcon(cat, p.approx), pane: 'places', catColor: safeColor(cat.color) })
+      .bindTooltip(p.approx ? `${escapeHtml(p.name)} <span class="tt-approx">(uppskattad position)</span>` : escapeHtml(p.name), { direction: 'top', offset: [0, -12] })
       .bindPopup(() => buildPopup(p), { minWidth: 300, maxWidth: 400, maxHeight: 440, autoPanPaddingTopLeft: [20, 130] });
   });
   // addLayers lägger till alla på en gång (mycket snabbare än en och en i ett kluster)
@@ -586,6 +609,8 @@ function buildPopup(p) {
     }),
     h('div', { class: 'pp-head' }, badge(cat, 32), h('div', {}, h('strong', {}, p.name), h('div', { class: 'muted' }, cat ? cat.name : ''))),
     p.address ? h('div', {}, p.address) : null,
+    p.approx ? h('div', { class: 'pp-approx' }, fa('triangle-exclamation'), ` Uppskattad position. ${APPROX_TEXT[p.approx]} `,
+      h('button', { type: 'button', class: 'small', onclick: () => adjustPosition(p) }, 'Justera position')) : null,
     p.note ? h('div', { class: 'note' }, p.note) : null);
 
   const general = p.contacts.filter(c => !c.flowId);
@@ -667,6 +692,11 @@ function openIconPicker(anchor, onPick) {
       h('button', { type: 'button', class: 'small secondary', onclick: () => pick('') }, 'Ingen')),
     msg,
     h('div', { class: 'ip-hint' }, 'Alla gratis "solid"-ikoner på fontawesome.com fungerar. Du kan också klistra in en emoji.'));
+  showPicker(anchor);
+}
+
+// Visar pickerEl (ikon- eller färgväljaren) intill knappen som öppnade den
+function showPicker(anchor) {
   // Inuti en öppen modal måste väljaren ligga i modalen, annars hamnar den bakom
   (anchor.closest('dialog') || document.body).append(pickerEl);
 
@@ -687,6 +717,145 @@ function closeIconPicker() {
   pickerEl.remove();
   pickerEl = null;
   document.removeEventListener('mousedown', pickerOutside);
+}
+// Escape stänger en öppen väljare (utan att stänga modalen bakom)
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && pickerEl) { e.preventDefault(); e.stopPropagation(); closeIconPicker(); }
+}, true);
+
+// ---------- Färgväljare ----------
+const clamp01 = x => Math.min(1, Math.max(0, x));
+const hexToRgb = hex => safeColor(hex).slice(1).match(/../g).map(x => parseInt(x, 16));
+const rgbToHex = (r, g, b) => '#' + [r, g, b].map(v => Math.round(v).toString(16).padStart(2, '0')).join('');
+function hexToHsv(hex) {
+  const [r, g, b] = hexToRgb(hex).map(v => v / 255);
+  const max = Math.max(r, g, b), d = max - Math.min(r, g, b);
+  let hue = 0;
+  if (d) hue = ((max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4) * 60 + 360) % 360;
+  return { h: hue, s: max ? d / max : 0, v: max };
+}
+function hsvToHex(hue, s, v) {
+  const f = n => { const k = (n + hue / 60) % 6; return (v - v * s * Math.max(0, Math.min(k, 4 - k, 1))) * 255; };
+  return rgbToHex(f(5), f(3), f(1));
+}
+// Tolka en färgkod: "#FFF000", "fff000", "#ff0" eller "rgb(255, 240, 0)" → "#fff000". Ogiltig → null.
+function parseColorInput(v) {
+  v = str(v).trim().toLowerCase();
+  let m = v.match(/^#?([0-9a-f]{6})$/);
+  if (m) return '#' + m[1];
+  m = v.match(/^#?([0-9a-f]{3})$/);
+  if (m) return '#' + [...m[1]].map(c => c + c).join('');
+  m = v.match(/^rgba?\(\s*(\d{1,3})\s*[,\s]\s*(\d{1,3})\s*[,\s]\s*(\d{1,3})/);
+  if (m && m.slice(1, 4).every(x => +x <= 255)) return rgbToHex(+m[1], +m[2], +m[3]);
+  return null;
+}
+
+// Knapp som visar vald färg och öppnar färgväljaren. onChange anropas direkt när färgen ändras.
+function colorButton(current, onChange) {
+  const dot = h('span', { class: 'color-dot', style: `background:${safeColor(current)}` });
+  const btn = h('button', { type: 'button', class: 'secondary color-btn', title: 'Välj färg' }, dot, ' Färg');
+  btn.onclick = () => openColorPicker(btn, current, c => { current = c; dot.style.background = c; onChange(c); });
+  return btn;
+}
+
+function openColorPicker(anchor, current, onChange) {
+  closeIconPicker();
+  let hex = safeColor(current);
+  let hsv = hexToHsv(hex);
+
+  const knob = h('div', { class: 'cp-knob' });
+  const sv = h('div', { class: 'cp-sv', tabIndex: 0, title: 'Mättnad och ljushet', 'aria-label': 'Mättnad och ljushet' }, knob);
+  const hue = h('input', { type: 'range', class: 'cp-hue', min: 0, max: 359, step: 1, 'aria-label': 'Färgton' });
+  const hexIn = h('input', { class: 'cp-hex', maxLength: 32, spellcheck: false, placeholder: '#FFF000', 'aria-label': 'Färgkod' });
+  const dot = h('span', { class: 'cp-dot' });
+  const msg = h('div', { class: 'ip-msg' });
+  const grid = h('div', { class: 'cp-grid' }, COLOR_PRESETS.map(c =>
+    h('button', { type: 'button', class: 'cp-sw', title: c.toUpperCase(), style: `background:${c}`, 'data-c': c, onclick: () => { setHex(c); closeIconPicker(); } })));
+
+  function render(keepText) {
+    sv.style.background = `linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, transparent), hsl(${hsv.h} 100% 50%)`;
+    knob.style.left = hsv.s * 100 + '%';
+    knob.style.top = (1 - hsv.v) * 100 + '%';
+    knob.style.background = hex;
+    hue.value = Math.round(hsv.h);
+    dot.style.background = hex;
+    if (!keepText) { hexIn.value = hex.toUpperCase(); hexIn.classList.remove('bad'); msg.textContent = ''; }
+    grid.querySelectorAll('.cp-sw').forEach(b => b.classList.toggle('sel', b.dataset.c === hex));
+  }
+  function setHex(c, keepText) {
+    const n = hexToHsv(c);
+    if (!n.s || !n.v) n.h = hsv.h;   // grå/svart saknar färgton – behåll reglagets läge
+    if (!n.v) n.s = hsv.s;
+    hsv = n;
+    hex = c;
+    render(keepText);
+    onChange(hex);
+  }
+  function setHsv() {
+    hex = hsvToHex(hsv.h, hsv.s, hsv.v);
+    render();
+    onChange(hex);
+  }
+
+  // Dra i fältet (mus, penna eller finger)
+  const dragSv = e => {
+    const r = sv.getBoundingClientRect();
+    hsv.s = clamp01((e.clientX - r.left) / r.width);
+    hsv.v = 1 - clamp01((e.clientY - r.top) / r.height);
+    setHsv();
+  };
+  sv.onpointerdown = e => { e.preventDefault(); sv.focus(); sv.setPointerCapture(e.pointerId); dragSv(e); sv.onpointermove = dragSv; };
+  sv.onpointerup = sv.onpointercancel = () => { sv.onpointermove = null; };
+  // Piltangenter i fältet
+  sv.onkeydown = e => {
+    const step = e.shiftKey ? 0.1 : 0.02;
+    const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }[e.key];
+    if (!d) return;
+    e.preventDefault();
+    hsv.s = clamp01(hsv.s + d[0]);
+    hsv.v = clamp01(hsv.v + d[1]);
+    setHsv();
+  };
+  hue.oninput = () => { hsv.h = +hue.value; setHsv(); };
+
+  // Färgkod: uppdateras medan man skriver när koden är giltig
+  hexIn.oninput = () => {
+    const c = parseColorInput(hexIn.value);
+    msg.textContent = '';
+    hexIn.classList.toggle('bad', !c && hexIn.value.trim() !== '');
+    if (c) setHex(c, true);
+  };
+  hexIn.onkeydown = e => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    if (parseColorInput(hexIn.value)) closeIconPicker();
+    else msg.textContent = 'Ogiltig färgkod. Skriv t.ex. #FFF000, FFF000, #FF0 eller rgb(255, 240, 0).';
+  };
+  hexIn.onblur = () => { if (!parseColorInput(hexIn.value)) render(); };
+  hexIn.onfocus = () => hexIn.select();
+
+  // Pipett (plocka en färg från skärmen) – finns i Chrome och Edge
+  const eyedropper = 'EyeDropper' in window
+    ? h('button', {
+      type: 'button', class: 'icon', title: 'Plocka färg från skärmen',
+      onclick: async () => {
+        try { const r = await new window.EyeDropper().open(); const c = parseColorInput(r.sRGBHex); if (c) setHex(c); } catch { /* avbrutet */ }
+      }
+    }, fa('eye-dropper'))
+    : null;
+
+  pickerEl = h('div', { class: 'iconpicker colorpicker' },
+    h('div', { class: 'ip-group' }, 'Färdiga färger'),
+    grid,
+    h('div', { class: 'ip-group' }, 'Egen färg'),
+    sv,
+    hue,
+    h('div', { class: 'ip-row cp-row' },
+      dot, hexIn, eyedropper,
+      h('button', { type: 'button', class: 'small', onclick: closeIconPicker }, 'Klar')),
+    msg);
+  render();
+  showPicker(anchor);
 }
 
 // ---------- Modal: Flöden / Kategorier / Speditörer ----------
@@ -966,10 +1135,7 @@ function renderRegistryEditor(kind) {
   let preview = badge(d, 44);
   const iconBtn = h('button', { type: 'button', class: 'secondary', title: 'Välj ikon' }, d.icon ? iconNode(d.icon) : '·', ' Byt ikon');
   iconBtn.onclick = () => openIconPicker(iconBtn, icon => { d.icon = icon; renderRegistryEditor(kind); });
-  const color = h('input', {
-    type: 'color', class: 'swatch', value: safeColor(d.color), title: 'Välj färg',
-    oninput: e => { d.color = e.target.value; const nb = badge(d, 44); preview.replaceWith(nb); preview = nb; }
-  });
+  const color = colorButton(d.color, c => { d.color = c; const nb = badge(d, 44); preview.replaceWith(nb); preview = nb; });
 
   const fields = [
     h('div', { class: 'grid2' },
@@ -1032,7 +1198,7 @@ function saveRegistryItem() {
 }
 
 // ---------- Modal: Platser (lista) ----------
-const listFilter = { q: '', cat: 'all', flow: 'all' };
+const listFilter = { q: '', cat: 'all', flow: 'all', pos: 'all' };
 
 function openPlacesDialog() {
   closeAllDialogs();
@@ -1059,11 +1225,17 @@ function showPlacesList() {
     placeData.flows.map(f => h('option', { value: f.id }, f.name)),
     h('option', { value: 'none' }, 'Utan flöden'));
   flowSel.value = listFilter.flow === 'none' || flowById(listFilter.flow) ? listFilter.flow : 'all';
+  const nApprox = placeData.places.filter(p => p.approx).length;
+  const posSel = h('select', { onchange: e => { listFilter.pos = e.target.value; renderPlaceRows(); } },
+    h('option', { value: 'all' }, 'Alla positioner'),
+    h('option', { value: 'approx' }, `Uppskattad position (${nApprox})`),
+    h('option', { value: 'exact' }, 'Exakt position'));
+  posSel.value = listFilter.pos;
 
   view.innerHTML = '';
   view.append(
     dlgHead([fa('location-dot'), ' Platser'], closeAllDialogs),
-    h('div', { class: 'dlg-toolbar' }, search, catSel, flowSel,
+    h('div', { class: 'dlg-toolbar' }, search, catSel, flowSel, nApprox || listFilter.pos !== 'all' ? posSel : null,
       h('button', { type: 'button', class: 'secondary', onclick: () => openImportDialog() }, fa('file-import'), ' Importera JSON'),
       h('button', { type: 'button', onclick: () => openPlaceEditor(null, 'list') }, '+ Ny plats')),
     h('div', { class: 'dlg-body' }, h('div', { id: 'placeRows' })),
@@ -1086,6 +1258,7 @@ function renderPlaceRows() {
   const rows = sortByName(placeData.places
     .filter(p => listFilter.cat === 'all' || p.categoryId === listFilter.cat)
     .filter(p => listFilter.flow === 'all' || (listFilter.flow === 'none' ? !p.flows.length : p.flows.some(pf => pf.flowId === listFilter.flow)))
+    .filter(p => listFilter.pos === 'all' || (listFilter.pos === 'approx' ? !!p.approx : !p.approx))
     .filter(p => !q || placeSearchText(p).includes(q)));
 
   box.innerHTML = '';
@@ -1099,7 +1272,8 @@ function renderPlaceRows() {
     const cat = catById(p.categoryId);
     box.append(h('div', { class: 'trow' },
       badge(cat),
-      h('div', {}, h('strong', {}, p.name), h('small', {}, p.address)),
+      h('div', {}, h('strong', {}, p.name),
+        h('small', {}, p.approx ? h('span', { class: 'approx-tag', title: 'Uppskattad position – ' + APPROX_TEXT[p.approx] }, fa('triangle-exclamation'), ' ') : null, p.address)),
       h('div', {}, cat ? cat.name : ''),
       h('div', { class: 'flowchips' }, flowChips(p)),
       h('div', { class: 'muted', title: `${p.contacts.length} kontaktpersoner` }, p.contacts.length ? [fa('user'), ` ${p.contacts.length}`] : ''),
@@ -1145,6 +1319,8 @@ function openPlaceEditor(place, ret) {
         categoryId: (catById(lastCategoryId) || placeData.categories[0] || {}).id || '',
         note: '', contacts: [], flows: []
       };
+  quickNew = null;
+  addrNote = place && place.approx ? `Uppskattad position: ${APPROX_TEXT[place.approx]} Klicka "Justera i kartan" och sätt den exakt.` : '';
   renderEditor();
   if (!placesDlg.open) placesDlg.showModal();
   setDraftMarker(editDraft.lat, editDraft.lon);
@@ -1163,6 +1339,81 @@ placesDlg.addEventListener('cancel', e => {
   e.preventDefault();
   if (editDraft) leaveEditor(); else closeAllDialogs();
 });
+
+// ----- Skapa ny kategori/flöde direkt från platsformuläret -----
+// quickNew = { kind: 'categories'|'flows', name, color, icon, iconPicked } när rutan är öppen
+let quickNew = null;
+// Upplysning under adressfältet (t.ex. att husnumret saknas i kartdatan)
+let addrNote = '';
+
+function openQuickNew(kind) {
+  const list = placeData[kind];
+  quickNew = { kind, name: '', color: PALETTE[list.length % PALETTE.length], icon: kind === 'flows' ? 'fa:arrows-rotate' : 'fa:location-dot', iconPicked: false };
+  renderEditor();
+  const inp = el('qn-name');
+  if (inp) { inp.focus(); inp.scrollIntoView({ block: 'nearest' }); }
+}
+
+function quickNewPanel(kind) {
+  if (!quickNew || quickNew.kind !== kind) return null;
+  const q = quickNew;
+  const isCat = kind === 'categories';
+  const msg = h('span', { class: 'error' });
+  let preview = badge(q, 34);
+  const updatePreview = () => { const nb = badge(q, 34); preview.replaceWith(nb); preview = nb; };
+  const defaultIcon = isCat ? 'fa:location-dot' : 'fa:arrows-rotate';
+
+  const create = () => {
+    const name = q.name.trim();
+    if (!name) { msg.textContent = 'Skriv ett namn.'; el('qn-name').focus(); return; }
+    // Finns den redan (samma namn)? Använd den i stället för att skapa en dubblett.
+    let item = placeData[kind].find(x => x.name.toLowerCase() === name.toLowerCase());
+    if (!item) {
+      item = isCat
+        ? { id: uid(), name, color: q.color, icon: q.icon }
+        : { id: uid(), name, color: q.color, icon: q.icon, carrierId: null };
+      placeData[kind].push(item);
+      if (isCat) setCatVisible(item.id, true); else setFlowVisible(item.id, true);
+      refreshPlaces();
+    }
+    if (isCat) editDraft.categoryId = item.id;
+    else if (!editDraft.flows.some(pf => pf.flowId === item.id)) editDraft.flows.push({ flowId: item.id, note: '', times: [] });
+    quickNew = null;
+    renderEditor();
+  };
+  const cancel = () => { quickNew = null; renderEditor(); };
+
+  const nameIn = h('input', {
+    id: 'qn-name', type: 'text', value: q.name, placeholder: isCat ? 'T.ex. Vårdcentral' : 'T.ex. Expressbud',
+    oninput: e => {
+      q.name = e.target.value;
+      msg.textContent = '';
+      // Gissa ikon från namnet tills man själv valt en
+      if (!q.iconPicked) { q.icon = guessIcon(q.name) || defaultIcon; updatePreview(); iconBtn.firstChild.replaceWith(iconNode(q.icon)); }
+    },
+    onkeydown: e => {
+      if (e.key === 'Enter') { e.preventDefault(); create(); }
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel(); }
+    }
+  });
+  const iconBtn = h('button', { type: 'button', class: 'secondary', title: 'Välj ikon' }, iconNode(q.icon), ' Ikon');
+  iconBtn.onclick = () => openIconPicker(iconBtn, icon => {
+    q.icon = icon; q.iconPicked = true;
+    updatePreview(); iconBtn.firstChild.replaceWith(iconNode(q.icon));
+  });
+  const colorBtn = colorButton(q.color, c => { q.color = c; updatePreview(); });
+
+  return h('div', { class: 'quick-new' },
+    h('div', { class: 'qn-title' }, isCat ? 'Ny kategori' : 'Nytt flöde'),
+    h('div', { class: 'qn-row' },
+      preview, nameIn, iconBtn, colorBtn),
+    h('div', { class: 'qn-row qn-foot' },
+      msg,
+      h('span', { class: 'spacer' }),
+      h('button', { type: 'button', class: 'small secondary', onclick: cancel }, 'Avbryt'),
+      h('button', { type: 'button', class: 'small', onclick: create }, isCat ? 'Skapa och välj' : 'Skapa och koppla')),
+    isCat ? null : h('div', { class: 'hint small' }, 'Speditör för flödet väljer du senare under Flöden.'));
+}
 
 // Textfält som skriver direkt till ett objekt
 function bound(obj, key, props = {}) {
@@ -1251,17 +1502,24 @@ function flowsEditor() {
       contactsEditor(pf.flowId)));
   });
 
-  const available = placeData.flows.filter(f => !editDraft.flows.some(pf => pf.flowId === f.id));
-  if (!placeData.flows.length) {
-    wrap.append(h('p', { class: 'hint' }, 'Inga flöden finns ännu. Skapa dem under Flöden i menyn.'));
-  } else if (available.length) {
+  const available = sortByName(placeData.flows.filter(f => !editDraft.flows.some(pf => pf.flowId === f.id)));
+  const newFlowBtn = quickNew && quickNew.kind === 'flows' ? null
+    : h('button', { type: 'button', class: 'small secondary', onclick: () => openQuickNew('flows') }, '+ Nytt flöde…');
+  if (available.length) {
     const sel = h('select', {}, available.map(f => h('option', { value: f.id }, f.name)));
     wrap.append(h('div', { class: 'add-flow' }, sel,
       h('button', {
         type: 'button', class: 'small',
         onclick: () => { editDraft.flows.push({ flowId: sel.value, note: '', times: [] }); renderEditor(); }
-      }, '+ Koppla flöde')));
+      }, '+ Koppla flöde'),
+      newFlowBtn));
+  } else {
+    wrap.append(h('div', { class: 'add-flow' },
+      placeData.flows.length ? null : h('span', { class: 'hint' }, 'Inga flöden finns ännu.'),
+      newFlowBtn));
   }
+  const panel = quickNewPanel('flows');
+  if (panel) wrap.append(panel);
   return wrap;
 }
 
@@ -1273,17 +1531,35 @@ function renderEditor() {
 
   // Adressfält med förslag och val i kartan
   const addrInput = h('input', { id: 'pe-addr', type: 'text', placeholder: 'Sök adress…', autocomplete: 'off', value: d.address, class: d.lat != null ? 'ok' : '' });
+  const addrHint = h('div', { class: 'hint small addr-hint' }, addrNote);
+  const setAddrNote = t => { addrNote = t; addrHint.textContent = t; };
+  const pickBtn = h('button', { type: 'button', class: 'icon', title: 'Klicka i kartan där platsen ligger, t.ex. exakt vid lastintaget', onclick: startPlacePick },
+    fa('location-dot'), d.lat != null ? ' Justera i kartan' : ' Välj i kartan');
   const addrWrap = h('div', { class: 'stop' },
     h('label', {}, 'Adress'),
-    h('div', { class: 'inputrow' }, addrInput,
-      h('button', { type: 'button', class: 'icon', title: 'Välj i kartan', onclick: startPlacePick }, fa('location-dot'), ' Välj i kartan')));
+    h('div', { class: 'inputrow' }, addrInput, pickBtn));
   attachAutocomplete(addrInput, addrWrap,
     r => {
-      d.address = r.full;
+      // Kartdatan saknar ofta husnummer (t.ex. "Försörjningsvägen 1C"). Har man skrivit ett nummer
+      // men valt en hel väg behålls numret i adressen, och nålen får justeras i kartan.
+      const num = houseNumberOf(addrInput.value);
+      let full = r.full;
+      // Egna platser i förslagen har ingen typ – deras position räknas som exakt
+      d.approx = r.type || r.isStreet ? approxOf(r, num) : '';
+      if (num && r.isStreet && !r.housenumber) {
+        full = [`${r.main} ${num}`, r.place].filter(Boolean).join(', ');
+        setAddrNote(`Husnummer ${num} finns inte i kartdatan, så nålen hamnar mitt på vägen. Klicka "Justera i kartan" och sätt den exakt.`);
+      } else if (d.approx) {
+        setAddrNote(`${APPROX_TEXT[d.approx]} Klicka "Justera i kartan" om du vill sätta den exakt.`);
+      } else {
+        setAddrNote('');
+      }
+      d.address = full;
       d.lat = r.lat;
       d.lon = r.lon;
-      addrInput.value = r.full;
+      addrInput.value = full;
       addrInput.classList.add('ok');
+      pickBtn.lastChild.textContent = ' Justera i kartan';
       if (!d.name.trim()) {
         // T.ex. "Stadsbiblioteket, Sveavägen 73" -> "Stadsbiblioteket" (ta bort ev. ikon-prefix)
         d.name = (r.name || r.main.split(',')[0]).replace(/^[^\p{L}\d]+/u, '');
@@ -1293,15 +1569,22 @@ function renderEditor() {
       map.panTo([d.lat, d.lon]);
     },
     () => {
+      // Texten kan ändras fritt (t.ex. lägga till husnummer eller "lastintag") – nålen står kvar
       d.address = addrInput.value;
-      d.lat = d.lon = null;
       addrInput.classList.remove('ok');
-      setDraftMarker(null);
+      if (d.lat != null) setAddrNote('Nålen står kvar där den var. Välj ett förslag för att flytta den, eller justera i kartan.');
     });
 
-  const catSel = h('select', { onchange: e => { d.categoryId = e.target.value; } },
-    placeData.categories.map(c => h('option', { value: c.id }, c.name)));
-  catSel.value = d.categoryId;
+  const catSel = h('select', {
+    onchange: e => {
+      if (e.target.value === '__new') { e.target.value = d.categoryId; openQuickNew('categories'); return; }
+      d.categoryId = e.target.value;
+    }
+  },
+  catById(d.categoryId) ? null : h('option', { value: '' }, 'Välj kategori…'),
+  sortByName(placeData.categories).map(c => h('option', { value: c.id }, c.name)),
+  h('option', { value: '__new' }, '+ Ny kategori…'));
+  catSel.value = catById(d.categoryId) ? d.categoryId : '';
 
   view.innerHTML = '';
   view.append(
@@ -1310,12 +1593,14 @@ function renderEditor() {
       h('div', { class: 'grid2' },
         h('label', { class: 'field' }, 'Namn', bound(d, 'name', { id: 'pe-name', placeholder: 'T.ex. Akademiska sjukhuset, entré 70' })),
         h('label', { class: 'field' }, 'Kategori', catSel)),
+      quickNewPanel('categories'),
       addrWrap,
+      addrHint,
       h('label', { class: 'field' }, 'Anteckning',
         h('textarea', { rows: 2, placeholder: 'T.ex. lastkaj på baksidan, portkod 1234', value: d.note, oninput: e => { d.note = e.target.value; } })),
       h('h3', {}, 'Kontaktpersoner för platsen'),
       contactsEditor(null),
-      h('h3', {}, 'Flöden och tider'),
+      h('h3', {}, 'Flöden'),
       flowsEditor()),
     h('div', { class: 'dlg-foot' },
       editingId ? h('button', { type: 'button', class: 'danger', onclick: deleteEditedPlace }, 'Ta bort plats') : null,
@@ -1332,7 +1617,7 @@ function savePlace() {
 
   d.name = d.name.trim();
   if (!d.name) return err('Ange ett namn.');
-  if (!catById(d.categoryId)) return err('Välj en kategori (skapa en under Kategorier om listan är tom).');
+  if (!catById(d.categoryId)) return err('Välj en kategori, eller skapa en med "+ Ny kategori…" i listan.');
   if (d.lat == null) return err('Välj en adress i förslagslistan eller i kartan.');
   for (const pf of d.flows) {
     const fname = (flowById(pf.flowId) || {}).name || 'flödet';
@@ -1373,6 +1658,11 @@ function startPlacePick() {
   if (typeof cancelRoutePick === 'function') cancelRoutePick();
   placePicking = true;
   placesDlg.close();
+  // Zooma in på nålen så att man kan sätta den exakt (t.ex. vid rätt lastintag)
+  if (editDraft && editDraft.lat != null) map.setView([editDraft.lat, editDraft.lon], Math.max(map.getZoom(), 18));
+  banner.textContent = editDraft && editDraft.lat != null
+    ? 'Klicka i kartan där platsen ligger exakt, t.ex. vid lastintaget (Esc avbryter)'
+    : 'Klicka i kartan där platsen ligger (Esc avbryter)';
   banner.hidden = false;
   map.getContainer().style.cursor = 'crosshair';
 }
@@ -1397,8 +1687,17 @@ map.on('click', async e => {
   const { lat, lng } = e.latlng;
   d.lat = lat;
   d.lon = lng;
-  d.address = 'Hämtar adress…';
+  d.approx = '';   // satt för hand = exakt
   setDraftMarker(lat, lng);
+  // Har man redan en adress behålls den – klicket flyttar bara nålen
+  if (d.address.trim()) {
+    addrNote = 'Nålen är placerad i kartan. Adressen ovan är oförändrad.';
+    setPlacePicking(false);
+    renderEditor();
+    return;
+  }
+  d.address = 'Hämtar adress…';
+  addrNote = 'Adressen är hämtad från kartan – ändra den gärna, nålen står kvar.';
   setPlacePicking(false);
   renderEditor();
   const addr = await reverseGeocode(lat, lng);
