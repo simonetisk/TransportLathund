@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="sv" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TransportLathund</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <!-- Ikoner: Font Awesome Free (namnen på fontawesome.com) -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="map"></main>
+
+  <!-- ================= FLYTANDE MENY ================= -->
+  <div id="topbar">
+    <nav class="menubar">
+      <span class="brand">TransportLathund</span>
+      <button type="button" data-open="places"><i class="fa-solid fa-location-dot"></i> Platser</button>
+      <button type="button" data-open="flows"><i class="fa-solid fa-arrows-rotate"></i> Flöden</button>
+      <button type="button" data-open="categories"><i class="fa-solid fa-tags"></i> Kategorier</button>
+      <button type="button" data-open="carriers"><i class="fa-solid fa-truck"></i> Speditörer</button>
+      <span class="menu-sep"></span>
+      <button type="button" id="themeToggle" class="theme-btn" title="Byt tema"><i class="fa-solid fa-sun"></i></button>
+    </nav>
+    <div class="filterbar">
+      <div class="dropdown" id="ddCats">
+        <button type="button" class="dd-btn"></button>
+        <div class="dd-panel" hidden></div>
+      </div>
+      <div class="dropdown" id="ddFlows">
+        <button type="button" class="dd-btn"></button>
+        <div class="dd-panel" hidden></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= SPARSTATUS (uppe till höger) ================= -->
+  <div id="saveStatus"></div>
+
+  <!-- ================= MODALER ================= -->
+  <dialog id="placesDialog" class="bigdlg"><div id="placesView" class="dlg-view"></div></dialog>
+  <dialog id="flowsDialog" class="bigdlg"><div id="flowsView" class="dlg-view"></div></dialog>
+  <dialog id="categoriesDialog" class="bigdlg"><div id="categoriesView" class="dlg-view"></div></dialog>
+  <dialog id="carriersDialog" class="bigdlg"><div id="carriersView" class="dlg-view"></div></dialog>
+  <dialog id="changesDialog" class="bigdlg"><div id="changesView" class="dlg-view"></div></dialog>
+  <dialog id="importDialog" class="bigdlg"><div id="importView" class="dlg-view"></div></dialog>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+  <script src="vectormap.js"></script>
+  <script src="app.js"></script>
+  <script src="places.js"></script>
+  <script src="changes.js"></script>
+  <script src="import.js"></script>
+  <!-- Ruttplanering är avstängd för tillfället. Slå på genom att avkommentera:
+  <script src="route.js"></script>
+  -->
+</body>
+</html>
