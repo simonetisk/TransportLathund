@@ -16,7 +16,7 @@ const COLOR_PRESETS = [
 const PALETTE = COLOR_PRESETS.slice(0, 10);
 
 // ---------- Ikoner ----------
-// En ikon sparas som "fa:namn" (Font Awesome, solid) eller som en emoji (äldre data).
+// En ikon sparas som "fa:namn" (Font Awesome, solid). Emojier från äldre data byts mot ikoner när datan läses in.
 // Namnen är desamma som på fontawesome.com, t.ex. "circle-h" eller "truck-fast".
 const FA_ICONS = {
   'Vård': ['circle-h', 'hospital', 'house-medical', 'house-chimney-medical', 'stethoscope', 'user-doctor', 'tooth',
@@ -28,7 +28,6 @@ const FA_ICONS = {
   'Transport': ['truck', 'truck-fast', 'truck-medical', 'van-shuttle', 'car', 'route'],
   'Övrigt': ['snowflake', 'temperature-low', 'triangle-exclamation', 'key', 'star', 'location-dot', 'flag', 'recycle', 'clock']
 };
-const EMOJI_ICONS = ['🏥', '🩺', '🦷', '💊', '🧪', '🩸', '📚', '🏭', '✉️', '📦', '🚚', '⭐'];
 
 const isFa = ic => /^fa:[a-z0-9-]+$/.test(ic || '');
 // HTML för en ikon (till markörer och innerHTML)
@@ -43,7 +42,7 @@ const fa = name => iconNode('fa:' + name);
 const iconLabel = ic => (isFa(ic) ? ic.slice(3) : ic || '');
 
 // Tolka det man skriver i "eget"-fältet: "truck", "fa-truck", "fa-solid fa-truck",
-// <i class="fa-solid fa-truck"></i> eller en emoji. Returnerar null om ikonen inte finns.
+// eller <i class="fa-solid fa-truck"></i>. Returnerar null om ikonen inte finns.
 function parseIconInput(v) {
   v = str(v).trim();
   if (!v) return '';
@@ -55,7 +54,7 @@ function parseIconInput(v) {
     probe.remove();
     return content && content !== 'none' && content !== 'normal' ? 'fa:' + m[1] : null;
   }
-  return /[^\x00-\x7f]/.test(v) ? v.slice(0, 8) : null;
+  return null;
 }
 
 // Gissa ikon utifrån namn (nya kategorier/flöden vid import och vid uppgradering)
@@ -70,6 +69,12 @@ const EMOJI_FA = {
   '📚': 'book', '🏫': 'school', '🏭': 'warehouse', '🏢': 'building', '✉️': 'envelope', '📨': 'envelope', '📬': 'envelope',
   '📦': 'box-archive', '🚚': 'truck', '🚑': 'truck-medical', '❄️': 'snowflake', '⚠️': 'triangle-exclamation',
   '🔑': 'key', '⭐': 'star', '📍': 'location-dot', '🔄': 'arrows-rotate', '♿': 'wheelchair', '👶': 'baby', '🧠': 'brain'
+};
+// Gör om en ikon som inte är Font Awesome (t.ex. en emoji från äldre data) till en Font Awesome-ikon:
+// först efter namnet, sedan efter emojin, annars standardikonen för sorten.
+const toFaIcon = (ic, name, fallback) => {
+  if (!ic || isFa(ic)) return ic || '';
+  return guessIcon(name) || (EMOJI_FA[ic] ? 'fa:' + EMOJI_FA[ic] : fallback);
 };
 const guessIcon = name => (NAME_ICON[str(name).trim().toLowerCase()] ? 'fa:' + NAME_ICON[str(name).trim().toLowerCase()] : '');
 const DAY_NAMES = ['Mån', 'Tis', 'Ons', 'Tor', 'Fre', 'Lör', 'Sön'];
@@ -120,7 +125,8 @@ function uiDialog(message, { buttons, input } = {}) {
     }, b.label));
     if (field) field.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); done(field.value); } };
     dlg.addEventListener('cancel', e => { e.preventDefault(); done(null); });
-    dlg.append(h('div', { class: 'uidlg-msg' }, message), field, h('div', { class: 'uidlg-btns' }, btns));
+    // (inte dlg.append direkt: den skriver ut "null" när det inte finns något textfält)
+    dlg.append(...[h('div', { class: 'uidlg-msg' }, message), field, h('div', { class: 'uidlg-btns' }, btns)].filter(Boolean));
     document.body.append(dlg);
     dlg.showModal();
     (field || btns[btns.length - 1]).focus();
@@ -146,7 +152,7 @@ const uiPrompt = (message, value = '') => uiDialog(message, {
 //     flows:    [{ flowId, note, times: [{ id, type: 'pickup'|'delivery', from, to, days: [1..7], note }] }]
 //   }]
 // }
-// Ikoner: "fa:namn" (Font Awesome) eller emoji.
+// Ikoner: "fa:namn" (Font Awesome).
 // Vilka kategorier/flöden som visas på kartan sparas separat (FILTERS_KEY), inte i datafilen.
 const normIcon = ic => str(ic).slice(0, 40);
 const normCategory = c => ({ id: str(c.id) || uid(), name: str(c.name), color: safeColor(c.color), icon: normIcon(c.icon) });
@@ -191,33 +197,20 @@ function normalizeData(d) {
     const best = Object.entries(count).sort((a, b) => b[1] - a[1])[0];
     if (best) f.carrierId = best[0];
   });
-  return {
+  const out = {
     categories: arr(d.categories).filter(c => c && c.name).map(normCategory),
     flows: arr(d.flows).filter(f => f && f.name).map(normFlow),
     carriers: arr(d.carriers).filter(s => s && s.name).map(normCarrier),
     places: arr(d.places).filter(validPlace).map(normPlace)
   };
+  // Bara Font Awesome-ikoner: emojier från äldre data byts ut
+  out.categories.forEach(x => { x.icon = toFaIcon(x.icon, x.name, 'fa:location-dot'); });
+  out.flows.forEach(x => { x.icon = toFaIcon(x.icon, x.name, 'fa:arrows-rotate'); });
+  out.carriers.forEach(x => { x.icon = toFaIcon(x.icon, x.name, 'fa:truck'); });
+  return out;
 }
 
 const emptyData = () => ({ categories: [], flows: [], carriers: [], places: [] });
-
-function defaultData() {
-  return {
-    categories: [
-      { id: uid(), name: 'Sjukhus', color: '#f28b82', icon: 'fa:circle-h' },
-      { id: uid(), name: 'Hälsocentral', color: '#7fd1a0', icon: 'fa:house-medical' },
-      { id: uid(), name: 'Folktandvård', color: '#7cc4f0', icon: 'fa:tooth' },
-      { id: uid(), name: 'Lager', color: '#f6ae6b', icon: 'fa:warehouse' }
-    ],
-    flows: [
-      { id: uid(), name: 'Post', color: '#8ea8f5', icon: 'fa:envelope', carrierId: null },
-      { id: uid(), name: 'Paket', color: '#f5d76e', icon: 'fa:box-archive', carrierId: null },
-      { id: uid(), name: 'Blod och prover', color: '#f28b82', icon: 'fa:droplet', carrierId: null }
-    ],
-    carriers: [],
-    places: []
-  };
-}
 
 // Byter emoji-ikoner mot Font Awesome (görs en gång; syns som osparade ändringar)
 const ICONS_UPGRADED_KEY = 'transportlathund.icons-fa';
@@ -236,13 +229,12 @@ let filters = { hiddenCats: [], hiddenFlows: [], showNoFlow: true };
 function loadPlaceData() {
   let raw = null;
   try { raw = JSON.parse(recall(PLACES_KEY)); } catch { /* ignoreras */ }
-  if (!raw || !Array.isArray(raw.categories)) return defaultData();
+  if (!raw || !Array.isArray(raw.categories)) return emptyData();   // inget sparat: börja helt tomt
 
   const d = normalizeData(raw);
   if (!raw.version) {
     // Uppgradering från första prototypen
     d.categories.forEach(c => { if (!c.icon) c.icon = guessIcon(c.name); });
-    if (!d.flows.length) d.flows = defaultData().flows;
   }
   if (!recall(ICONS_UPGRADED_KEY)) {
     upgradeIcons(d);
@@ -460,6 +452,7 @@ document.querySelectorAll('[data-open]').forEach(b => {
     else if (what === 'flows') openRegistryDialog('flows');
     else if (what === 'categories') openRegistryDialog('categories');
     else if (what === 'carriers') openRegistryDialog('carriers');
+    else if (what === 'data') openChangesDialog();   // changes.js
   };
 });
 
@@ -684,14 +677,12 @@ function openIconPicker(anchor, onPick) {
       h('div', { class: 'ip-group' }, group),
       h('div', { class: 'ip-grid' }, names.map(n => h('button', { type: 'button', title: n, onclick: () => pick('fa:' + n) }, fa(n))))
     ]),
-    h('div', { class: 'ip-group' }, 'Emoji'),
-    h('div', { class: 'ip-grid' }, EMOJI_ICONS.map(ic => h('button', { type: 'button', onclick: () => pick(ic) }, ic))),
     h('div', { class: 'ip-row' },
       custom,
       h('button', { type: 'button', class: 'small', onclick: pickCustom }, 'OK'),
       h('button', { type: 'button', class: 'small secondary', onclick: () => pick('') }, 'Ingen')),
     msg,
-    h('div', { class: 'ip-hint' }, 'Alla gratis "solid"-ikoner på fontawesome.com fungerar. Du kan också klistra in en emoji.'));
+    h('div', { class: 'ip-hint' }, 'Alla gratis "solid"-ikoner på fontawesome.com fungerar.'));
   showPicker(anchor);
 }
 
@@ -1236,7 +1227,6 @@ function showPlacesList() {
   view.append(
     dlgHead([fa('location-dot'), ' Platser'], closeAllDialogs),
     h('div', { class: 'dlg-toolbar' }, search, catSel, flowSel, nApprox || listFilter.pos !== 'all' ? posSel : null,
-      h('button', { type: 'button', class: 'secondary', onclick: () => openImportDialog() }, fa('file-import'), ' Importera JSON'),
       h('button', { type: 'button', onclick: () => openPlaceEditor(null, 'list') }, '+ Ny plats')),
     h('div', { class: 'dlg-body' }, h('div', { id: 'placeRows' })),
     h('div', { class: 'dlg-foot' }, h('span', { id: 'placeCount', class: 'muted spacer' })));

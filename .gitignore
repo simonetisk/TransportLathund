@@ -1,3 +1,6 @@
 # Datafiler med egna platser/kontakter ska inte publiceras
 *.json
 *.json.bak
+*.xlsx
+*.xls
+~$*

@@ -136,7 +136,35 @@ label.field > input, label.field > select, label.field > textarea, div.field > d
 .menubar .menu-sep { width: 1px; align-self: stretch; background: var(--border); margin: 4px 4px; }
 .menubar .theme-btn { padding: 8px 10px; }
 
-.filterbar { display: flex; gap: 8px; }
+.filterbar { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; align-items: center; }
+
+/* Sökfältet */
+.searchbox { position: relative; display: flex; align-items: center; }
+.searchbox .search-ic { position: absolute; left: 13px; color: var(--muted); font-size: 13px; pointer-events: none; }
+.searchbox input {
+  width: 300px; max-width: calc(100vw - 32px); padding: 7px 14px 7px 34px; border-radius: 20px; font-size: 14px;
+  background: var(--panel); color: var(--text); border: 1px solid var(--border); box-shadow: var(--shadow);
+}
+.searchbox input:focus { outline: 2px solid var(--accent); outline-offset: 0; }
+.search-panel {
+  position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); z-index: 1200;
+  width: min(440px, calc(100vw - 24px)); max-height: 65vh; overflow-y: auto; padding: 6px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow);
+}
+.search-group { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 8px 8px 4px; }
+.search-group .muted { font-weight: 400; text-transform: none; letter-spacing: 0; }
+.search-hit { display: flex; gap: 10px; align-items: flex-start; padding: 7px 8px; border-radius: 6px; cursor: pointer; }
+.search-hit.sel { background: var(--hover); }
+.search-hit .badge { flex: none; margin-top: 1px; }
+.sh-person { flex: none; width: 26px; height: 26px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--secondary-bg); color: var(--muted); font-size: 12px; }
+.sh-main { min-width: 0; flex: 1; }
+.sh-title { font-weight: 600; font-size: 14px; }
+.sh-sub { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sh-links { display: flex; gap: 12px; flex-wrap: wrap; font-size: 13px; margin-top: 3px; }
+.sh-links a { color: var(--accent-text); text-decoration: none; }
+.sh-links a:hover { text-decoration: underline; }
+.search-hit mark { background: color-mix(in srgb, var(--warn) 35%, transparent); color: inherit; border-radius: 2px; }
+.search-empty { padding: 14px 10px; color: var(--muted); font-size: 13px; }
 .dropdown { position: relative; }
 .dd-btn {
   background: var(--panel); color: var(--text); border: 1px solid var(--border);
@@ -164,13 +192,14 @@ label.field > input, label.field > select, label.field > textarea, div.field > d
   background: var(--panel); border: 1px solid var(--border); box-shadow: var(--shadow);
 }
 #saveStatus:empty { display: none; }
-#saveStatus button { background: none; color: var(--text); border-radius: 0; padding: 9px 14px; font-size: 13px; font-weight: 600; }
+#saveStatus button { background: none; color: var(--text); border-radius: 0; padding: 9px 12px; font-size: 13px; font-weight: 600; }
 #saveStatus button:hover { background: var(--hover); filter: none; }
 #saveStatus .ss-dot { color: var(--warn); }
 #saveStatus .ss-ok { color: var(--ok); }
 #saveStatus button.ss-save { background: var(--accent); color: var(--on-accent); }
 #saveStatus button.ss-save:hover { filter: brightness(1.1); background: var(--accent); }
 #saveStatus.dirty { border-color: var(--warn); }
+#saveStatus.compact .ss-long { display: none; }
 
 /* ================= Ruttkort (används av route.js) ================= */
 .floatcard {
@@ -218,7 +247,7 @@ input.picking { outline: 2px solid var(--warn); }
 .dlg-toolbar { display: flex; gap: 8px; padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--panel-2); flex-wrap: wrap; }
 .dlg-toolbar input[type=search] { flex: 1; min-width: 200px; }
 .dlg-body { padding: 8px 20px 20px; overflow-y: auto; flex: 1; }
-.dlg-foot { display: flex; gap: 8px; align-items: center; padding: 12px 20px; border-top: 1px solid var(--border); background: var(--panel-2); }
+.dlg-foot { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px 20px; border-top: 1px solid var(--border); background: var(--panel-2); }
 .empty { padding: 40px 0; text-align: center; color: var(--muted); }
 
 /* Platstabell */
@@ -365,10 +394,19 @@ input.picking { outline: 2px solid var(--warn); }
   display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
   margin: 12px 0 4px; padding: 12px 14px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; font-size: 14px;
 }
-.file-info .fi-main { flex: 1; min-width: 240px; }
+.file-info .fi-main { flex: 1 1 100%; }
 .file-info code { font-size: 13px; }
+.uidlg-msg { max-height: 70vh; overflow-y: auto; }
 .notice { margin: 10px 0; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); font-size: 13px; }
+.notice ul { margin: 6px 0 0; padding-left: 20px; }
 .chg-group { margin-top: 16px; }
+.chg-box { margin-top: 14px; padding: 4px 14px 10px; border: 1px solid var(--border); border-radius: 10px; }
+.chg-box-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.chg-box-head h3 { margin: 0; }
+.chg-box .chg-group:first-of-type { margin-top: 10px; }
+.chg-box .chg-row:last-child { border-bottom: none; }
+.chg-locked-hint { margin-top: 10px; }
+button.unlocked { outline: 1px solid var(--warn); }
 .chg-row { display: flex; gap: 12px; align-items: flex-start; padding: 10px 6px; border-bottom: 1px solid var(--border); }
 .chg-row .badge { width: 24px; height: 24px; font-size: 13px; }
 .chg-row .chg-main { flex: 1; min-width: 0; }
@@ -387,6 +425,20 @@ pre.example {
 }
 .rules { font-size: 13px; color: var(--muted); padding-left: 18px; margin: 8px 0; }
 .rules li { margin: 3px 0; }
+.json-notice { margin-top: 0; font-size: 14px; }
+.json-opt { margin-bottom: 12px; }
+.json-opt-label { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+.json-kinds { display: flex; gap: 6px; flex-wrap: wrap; }
+.json-kind { background: var(--secondary-bg); color: var(--secondary-text); border: 1px solid var(--border); padding: 6px 12px; border-radius: 999px; font-size: 13px; }
+.json-kind.on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.json-guide .seg { flex-wrap: wrap; }
+.json-fields { width: 100%; border-collapse: collapse; font-size: 13px; }
+.json-fields td { padding: 5px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.json-fields td:first-child { white-space: nowrap; }
+.json-fields td:nth-child(2) { white-space: nowrap; }
+.json-fields .jf-kind th { text-align: left; padding: 12px 8px 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.json-fields tr.jf-extra td { opacity: .6; }
+.jf-req { color: var(--warn); font-weight: 600; }
 .import-log { margin-top: 12px; font-size: 13px; }
 .import-log .ok { color: var(--ok); }
 .import-log .err { color: var(--error); }
@@ -481,11 +533,9 @@ pre.example {
 @media (max-width: 1000px) {
   .import-grid { grid-template-columns: 1fr; }
 }
-/* Sparstatusen flyttas ner till vänster när den annars skulle krocka med menyraden */
-@media (max-width: 1340px) {
-  #saveStatus { top: auto; bottom: 12px; right: auto; left: 12px; }
-}
 @media (max-width: 760px) {
+  #saveStatus button { padding: 8px 10px; font-size: 12px; flex: 1 1 auto; }
+  #saveStatus .ss-long, #saveStatus .ss-xl { display: none; }
   .menubar .brand { display: none; }
   .menubar button { padding: 7px 8px; font-size: 13px; }
   .floatcard { left: 8px; right: 8px; width: auto; top: auto; bottom: 8px; max-height: 50vh; }
@@ -544,3 +594,12 @@ pre.example {
 .dup-diff thead th { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 .dup-diff tbody th { width: 120px; color: var(--muted); font-weight: 600; }
 .dup-diff td.new { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+
+/* Kort meddelande om kartan (t.ex. när reservkartan används) */
+.map-notice {
+  position: fixed; z-index: 1300; left: 50%; bottom: 24px; transform: translateX(-50%);
+  max-width: min(520px, calc(100vw - 32px)); padding: 10px 16px; border-radius: 10px; font-size: 13px;
+  background: var(--panel); color: var(--text); border: 1px solid var(--warn); box-shadow: var(--shadow);
+  transition: opacity .5s;
+}
+.map-notice.hide { opacity: 0; }

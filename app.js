@@ -1,9 +1,10 @@
 // TransportLathund – kärna: karta, kartstilar, adressökning och förslagslistor
 // Allt körs i webbläsaren. Externa tjänster:
 //   Kartbilder:  Esri (fungerar utan nyckel även när sidan öppnas som fil)
-//   Geokodning:  Photon (photon.komoot.io)
+//   Geokodning:  Photon (photon.komoot.io), med Nominatim (OpenStreetMap) som reserv vid import
 
 const PHOTON = 'https://photon.komoot.io';
+const NOMINATIM = 'https://nominatim.openstreetmap.org';
 const LAYER_KEY = 'transportlathund.layer';
 const THEME_KEY = 'transportlathund.theme';
 
@@ -56,35 +57,42 @@ map.on('resize', updateMinZoom);
 
 // Kartstilar. OSM:s och CARTO:s tile-servrar blockerar sidor som öppnas via file://
 // (ingen Referer), därför används Esris kartor, som fungerar utan nyckel.
+// Inställningarna gör att färre rutor laddas om: fler rutor runt skärmen sparas (keepBuffer)
+// och nya hämtas först när man slutat zooma/panorera, vilket är lättare för långsamma datorer.
+// Bara rutor som ligger (delvis) inom Sveriges ruta hämtas.
 const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services';
 const esri = (service, extra = {}) =>
   L.tileLayer(`${ESRI}/${service}/MapServer/tile/{z}/{y}/{x}`, {
     maxZoom: 19,
     attribution: 'Kartor &copy; Esri, HERE, Garmin, &copy; OpenStreetMap-bidragsgivare',
+    crossOrigin: true,        // så att kartcachen (sw.js) kan spara rutorna
+    bounds: SWEDEN_BOUNDS,    // hämta bara rutor runt Sverige
+    keepBuffer: 4,
+    updateWhenZooming: false,
+    updateWhenIdle: true,
     ...extra
   });
+// Enkla bildkartor: reserv om vektorkartan inte går att ladda (se vectormap.js)
+const esriCanvas = tone => L.layerGroup([
+  esri(`Canvas/World_${tone}_Gray_Base`, { maxNativeZoom: 16 }),
+  esri(`Canvas/World_${tone}_Gray_Reference`, { maxNativeZoom: 16 })
+]);
 
-const baseLayers = {
-  'Gatukarta': esri('World_Street_Map'),
-  'Minimalistisk ljus': L.layerGroup([
-    esri('Canvas/World_Light_Gray_Base', { maxNativeZoom: 16 }),
-    esri('Canvas/World_Light_Gray_Reference', { maxNativeZoom: 16 })
-  ]),
-  'Minimalistisk mörk': L.layerGroup([
-    esri('Canvas/World_Dark_Gray_Base', { maxNativeZoom: 16 }),
-    esri('Canvas/World_Dark_Gray_Reference', { maxNativeZoom: 16 })
-  ]),
-  'Satellit': L.layerGroup([
-    esri('World_Imagery', { attribution: 'Bilder &copy; Esri, Maxar, Earthstar Geographics' }),
-    esri('Reference/World_Boundaries_and_Places')
-  ]),
-  'Satellit utan etiketter': esri('World_Imagery', { attribution: 'Bilder &copy; Esri, Maxar, Earthstar Geographics' }),
-  'Terräng': esri('World_Topo_Map')
-};
-// Vektorkartor med svenska namn (vectormap.js), om filen är inläst
-if (typeof VECTOR_LAYERS === 'object') Object.assign(baseLayers, VECTOR_LAYERS);
+const baseLayers = {};
+if (typeof VECTOR_LAYERS === 'object') {
+  baseLayers['Vektor mörk'] = VECTOR_LAYERS['Vektor mörk'].setFallback(esriCanvas('Dark'));
+  baseLayers['Vektor ljus'] = VECTOR_LAYERS['Vektor ljus'].setFallback(esriCanvas('Light'));
+} else {
+  // vectormap.js saknas: använd bildkartorna direkt
+  baseLayers['Vektor mörk'] = esriCanvas('Dark');
+  baseLayers['Vektor ljus'] = esriCanvas('Light');
+}
+baseLayers['Satellit'] = L.layerGroup([
+  esri('World_Imagery', { attribution: 'Bilder &copy; Esri, Maxar, Earthstar Geographics' }),
+  esri('Reference/World_Boundaries_and_Places')
+]);
 
-let startLayer = 'Minimalistisk mörk';
+let startLayer = 'Vektor mörk';
 try { const s = localStorage.getItem(LAYER_KEY); if (s && baseLayers[s]) startLayer = s; } catch { /* ignoreras */ }
 baseLayers[startLayer].addTo(map);
 // Uppe till höger sitter sparstatusen, så kartväljaren ligger nere till höger
@@ -135,7 +143,20 @@ function approxOf(hit, wantedNumber) {
 // Söker upp en adress och provar enklare varianter om den inte hittas:
 // hela adressen → utan husnummer → utan postnummer → bara orten.
 // Returnerar { lat, lon, approx } eller null.
-async function geocodeWithFallback(addr) {
+// Svaren sparas under sidans livstid, så samma adress bara söks upp en gång
+// (importen förhandshämtar alla adresser parallellt och läser sedan härifrån).
+const geocodeCache = new Map();
+function geocodeWithFallback(addr) {
+  const key = String(addr).trim().toLowerCase();
+  if (!geocodeCache.has(key)) {
+    const p = geocodeUncached(addr);
+    geocodeCache.set(key, p);
+    p.catch(() => geocodeCache.delete(key));   // nätverksfel: försök igen nästa gång
+  }
+  return geocodeCache.get(key);
+}
+
+async function geocodeUncached(addr) {
   const parts = String(addr).split(',').map(s => s.trim()).filter(Boolean);
   const first = parts[0] || '';
   const num = houseNumberOf(addr);
@@ -151,8 +172,7 @@ async function geocodeWithFallback(addr) {
   ].filter((a, i, all) => a.q && all.findIndex(b => b.q === a.q) === i);
 
   for (const a of attempts) {
-    const hits = await searchAddress(a.q, 1);
-    await new Promise(r => setTimeout(r, 120));   // var snäll mot den fria söktjänsten
+    const hits = await lookupAddress(a.q);
     if (!hits.length) continue;
     const hit = hits[0];
     return { lat: hit.lat, lon: hit.lon, approx: a.area ? 'area' : approxOf(hit, num) };
@@ -160,12 +180,70 @@ async function geocodeWithFallback(addr) {
   return null;
 }
 
+// fetch som ger upp efter en stund i stället för att hänga när en tjänst inte svarar
+async function fetchWithTimeout(url, ms = 8000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try { return await fetch(url, { signal: ctrl.signal }); } finally { clearTimeout(t); }
+}
+
+// Om Photon inte svarar används Nominatim en stund (5 min) innan Photon provas igen.
+let photonDownUntil = 0;
+async function lookupAddress(q) {
+  if (Date.now() >= photonDownUntil) {
+    try {
+      const hits = await searchAddress(q, 1);
+      await new Promise(r => setTimeout(r, 120));   // var snäll mot den fria söktjänsten
+      return hits;
+    } catch {
+      photonDownUntil = Date.now() + 5 * 60 * 1000;
+    }
+  }
+  return searchNominatim(q);
+}
+
+// Nominatim tillåter högst ett anrop per sekund, så anropen ställs i kö.
+// (Används bara för enstaka uppslag och import, inte för förslag medan man skriver – det förbjuder Nominatims regler.)
+let nominatimQueue = Promise.resolve();
+function searchNominatim(q) {
+  const run = nominatimQueue.then(async () => {
+    const b = map.getBounds();   // föredra träffar i det område kartan visar
+    const url = `${NOMINATIM}/search?format=jsonv2&addressdetails=1&limit=1&countrycodes=se&accept-language=sv` +
+      `&viewbox=${b.getWest()},${b.getNorth()},${b.getEast()},${b.getSouth()}&q=${encodeURIComponent(q)}`;
+    try {
+      const res = await fetchWithTimeout(url, 10000);
+      if (!res.ok) throw new Error('Adressökning misslyckades');
+      return (await res.json()).map(formatNominatimResult);
+    } finally {
+      await new Promise(r => setTimeout(r, 1100));
+    }
+  });
+  nominatimQueue = run.catch(() => {});
+  return run;
+}
+
+const NOMINATIM_AREA = ['city', 'town', 'village', 'hamlet', 'municipality', 'county', 'state', 'country', 'postcode', 'suburb', 'quarter', 'neighbourhood', 'city_district'];
+function formatNominatimResult(r) {
+  const a = r.address || {};
+  const road = a.road || a.pedestrian || a.footway || '';
+  const main = [road || r.name, a.house_number].filter(Boolean).join(' ');
+  const place = [a.postcode, a.city || a.town || a.village || a.municipality].filter(Boolean).join(' ');
+  return {
+    main, place, full: [main, place].filter(Boolean).join(', '),
+    housenumber: a.house_number || '',
+    type: NOMINATIM_AREA.includes(r.addresstype) ? 'city' : (r.addresstype || ''),
+    isStreet: !a.house_number && (r.category === 'highway' || r.addresstype === 'road'),
+    lat: parseFloat(r.lat),
+    lon: parseFloat(r.lon)
+  };
+}
+
 async function searchAddress(q, limit = 6) {
   const c = map.getCenter();
   // bbox begränsar till Sveriges ruta; filtret på landskod tar bort träffar i
   // grannländer som råkar ligga inom rutan (Norge, Finland, Danmark).
   const url = `${PHOTON}/api/?q=${encodeURIComponent(q)}&limit=12&bbox=${SWEDEN_BBOX}&lat=${c.lat}&lon=${c.lng}`;
-  const res = await fetch(url);
+  const res = await fetchWithTimeout(url);
   if (!res.ok) throw new Error('Adressökning misslyckades');
   const data = await res.json();
   return data.features
@@ -180,7 +258,7 @@ async function searchAddress(q, limit = 6) {
 
 async function reverseGeocode(lat, lon) {
   try {
-    const res = await fetch(`${PHOTON}/reverse?lat=${lat}&lon=${lon}`);
+    const res = await fetchWithTimeout(`${PHOTON}/reverse?lat=${lat}&lon=${lon}`, 5000);
     const data = await res.json();
     if (data.features && data.features.length) return formatPhotonFeature(data.features[0]).full;
   } catch (e) { /* faller tillbaka på koordinater */ }
@@ -244,4 +322,10 @@ function attachAutocomplete(input, wrap, onChoose, onEdit) {
     else return;
     [...list.children].forEach((li, i) => li.classList.toggle('sel', i === sel));
   });
+}
+
+// ---------- Kartcache ----------
+// sw.js sparar kartrutor lokalt så att de inte laddas ner igen (bara när sidan körs från en webbadress)
+if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(e => console.warn('Kartcachen kunde inte startas:', e)));
 }

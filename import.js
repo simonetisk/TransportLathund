@@ -1,16 +1,72 @@
-// TransportLathund – importera platser från JSON
-// Formatet är gjort för att vara lätt att skriva för hand eller ta fram ur Excel:
-// namn på kategorier och flöden i stället för interna id:n, svenska fältnamn
-// (engelska fungerar också), och adress räcker – koordinaterna söks upp automatiskt.
+// TransportLathund – importera från JSON (kompletterar det som finns, tar aldrig bort något)
+// Excel är huvudsättet att läsa in och ersätta all data (excel.js). JSON-importen är till för
+// att lägga till eller uppdatera enstaka saker: platser, kategorier, flöden och/eller speditörer,
+// var för sig eller i samma fil.
+// Formatet är gjort för att vara lätt att skriva för hand: namn på kategorier och flöden i stället
+// för interna id:n, svenska fältnamn (engelska fungerar också), och adress räcker – koordinaterna
+// söks upp automatiskt.
 
 const importDlg = el('importDialog');
 
-const IMPORT_EXAMPLE = {
-  platser: [
-    {
+// ---------- Formatet: typer, fält och exempel ----------
+// Används både för att tolka filen och för att visa hjälpen i importrutan.
+const JSON_KINDS = [
+  { key: 'places', label: 'Platser', json: 'platser', aliases: ['platser', 'places'], icon: 'location-dot' },
+  { key: 'categories', label: 'Kategorier', json: 'kategorier', aliases: ['kategorier', 'categories'], icon: 'tags' },
+  { key: 'flows', label: 'Flöden', json: 'floden', aliases: ['floden', 'flöden', 'flows'], icon: 'arrows-rotate' },
+  { key: 'carriers', label: 'Speditörer', json: 'speditorer', aliases: ['speditorer', 'speditörer', 'carriers'], icon: 'truck' }
+];
+const KIND_SINGULAR = { places: 'Plats', categories: 'Kategori', flows: 'Flöde', carriers: 'Speditör' };
+const DEFAULT_ICON = { categories: 'fa:location-dot', flows: 'fa:arrows-rotate', carriers: 'fa:truck' };
+
+// Fält per typ. req: krävs alltid. full: visas bara i exemplet för "Komplett".
+const JSON_FIELDS = {
+  places: [
+    { f: 'namn', req: true, d: 'Platsens namn. Finns redan en plats med samma namn (eller samma adress) räknas den som dubblett.' },
+    { f: 'kategori', req: true, d: 'Namnet på kategorin. Finns den inte skapas den.' },
+    { f: 'adress', d: 'Gatuadress med ort. Koordinaterna söks upp automatiskt. Krävs om lat/lon saknas.' },
+    { f: 'lat, lon', d: 'Koordinater i stället för (eller utöver) adress, t.ex. 59.809 och 17.623.' },
+    { f: 'anteckning', full: true, d: 'Fri text om platsen.' },
+    { f: 'kontakter', full: true, d: 'Lista med kontakter för platsen: namn, roll, telefon, epost (minst ett av dem).' },
+    { f: 'floden', full: true, d: 'Lista med flöden på platsen. Varje flöde: flode (namn, krävs), speditor, anteckning, tider, kontakter.' },
+    { f: '  tider', full: true, d: 'Lista med tider: typ ("hämtning"/"leverans"), fran ("09:00"), till (valfri), dagar, notering.' },
+    { f: '  dagar', full: true, d: '"mån-fre", "vardagar", "helg", "alla", "mån,ons,fre" eller ["mån","ons"]. Utelämnat = mån–fre.' }
+  ],
+  categories: [
+    { f: 'namn', req: true, d: 'Kategorins namn, t.ex. "Sjukhus".' },
+    { f: 'farg', full: true, d: 'Färgkod, t.ex. "#f28b82". Utelämnad = en färg väljs automatiskt.' },
+    { f: 'ikon', full: true, d: 'Namn på en gratis "solid"-ikon från fontawesome.com, t.ex. "circle-h". Utelämnad = gissas från namnet.' }
+  ],
+  flows: [
+    { f: 'namn', req: true, d: 'Flödets namn, t.ex. "Post".' },
+    { f: 'farg', full: true, d: 'Färgkod, t.ex. "#8ea8f5".' },
+    { f: 'ikon', full: true, d: 'Ikon från fontawesome.com, t.ex. "envelope".' },
+    { f: 'speditor', full: true, d: 'Speditören som kör flödet. Finns den inte skapas den.' }
+  ],
+  carriers: [
+    { f: 'namn', req: true, d: 'Speditörens namn, t.ex. "PostNord".' },
+    { f: 'farg', full: true, d: 'Färgkod.' },
+    { f: 'ikon', full: true, d: 'Ikon från fontawesome.com, t.ex. "truck".' },
+    { f: 'anteckning', full: true, d: 'Fri text, t.ex. kundnummer.' },
+    { f: 'kontakter', full: true, d: 'Lista med kontakter: namn, roll, telefon, epost.' }
+  ]
+};
+
+// Exempel per typ och nivå. pos = 'adress' eller 'koordinater' (bara platser)
+function jsonExample(kind, level, pos) {
+  const full = level === 'full';
+  if (kind === 'places') {
+    const where = (addr, lat, lon) => (pos === 'koordinater' ? { lat, lon } : { adress: addr });
+    if (!full) {
+      return [
+        { namn: 'Akademiska sjukhuset', kategori: 'Sjukhus', ...where('Sjukhusvägen 1, 751 85 Uppsala', 59.8498, 17.6386) },
+        { namn: 'Gottsunda vårdcentral', kategori: 'Hälsocentral', ...where('Gottsunda centrum, Uppsala', 59.809, 17.623) }
+      ];
+    }
+    return [{
       namn: 'Akademiska sjukhuset',
       kategori: 'Sjukhus',
-      adress: 'Sjukhusvägen 1, 751 85 Uppsala',
+      ...where('Sjukhusvägen 1, 751 85 Uppsala', 59.8498, 17.6386),
       anteckning: 'Godsmottagning entré 70',
       kontakter: [
         { namn: 'Anna Andersson', roll: 'Godsmottagning', telefon: '018-611 00 00', epost: 'anna@example.se' },
@@ -27,21 +83,32 @@ const IMPORT_EXAMPLE = {
           ],
           kontakter: [{ namn: 'Bo Berg', epost: 'bo@example.se' }]
         },
-        {
-          flode: 'Paket',
-          speditor: 'DHL',
-          tider: [{ typ: 'hämtning', fran: '15:00', dagar: 'alla' }]
-        }
+        { flode: 'Paket', tider: [{ typ: 'hämtning', fran: '15:00', dagar: 'alla' }] }
       ]
-    },
-    {
-      namn: 'Gottsunda vårdcentral',
-      kategori: 'Hälsocentral',
-      lat: 59.809,
-      lon: 17.623
-    }
-  ]
-};
+    }];
+  }
+  if (kind === 'categories') {
+    return full
+      ? [{ namn: 'Sjukhus', farg: '#f28b82', ikon: 'circle-h' }, { namn: 'Lager', farg: '#f6ae6b', ikon: 'warehouse' }]
+      : [{ namn: 'Sjukhus' }, { namn: 'Lager' }];
+  }
+  if (kind === 'flows') {
+    return full
+      ? [{ namn: 'Post', farg: '#8ea8f5', ikon: 'envelope', speditor: 'PostNord' }, { namn: 'Blod och prover', farg: '#f28b82', ikon: 'droplet', speditor: 'Bud Express' }]
+      : [{ namn: 'Post' }, { namn: 'Blod och prover' }];
+  }
+  return full
+    ? [{ namn: 'PostNord', farg: '#7cc4f0', ikon: 'truck', anteckning: 'Kundnummer 123456', kontakter: [{ namn: 'Kundtjänst', telefon: '0771-33 33 10', epost: 'kundtjanst@example.se' }] }]
+    : [{ namn: 'PostNord' }, { namn: 'Bud Express' }];
+}
+
+// Hela exempelfilen för de valda typerna. Bara platser kan också skrivas som en lista [ ... ] direkt.
+function buildJsonExample(kinds, level, pos) {
+  const order = ['carriers', 'flows', 'categories', 'places'];   // läsordning: det som andra hänvisar till först
+  const out = {};
+  order.filter(k => kinds.includes(k)).forEach(k => { out[JSON_KINDS.find(x => x.key === k).json] = jsonExample(k, level, pos); });
+  return out;
+}
 
 // Ikoner för nya kategorier/flöden/speditörer: gissas från namnet (guessIcon i places.js)
 
@@ -129,6 +196,8 @@ function parseContact(c, flowId) {
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+// Antal adresser som söks upp samtidigt vid import. Lagom för den fria söktjänsten Photon.
+const GEOCODE_WORKERS = 4;
 const sameName = (a, b) => str(a).trim().toLowerCase() === str(b).trim().toLowerCase();
 // Adresser jämförs utan skillnad på stora/små bokstäver, mellanslag och kommatecken
 const normAddr = a => str(a).toLowerCase().replace(/[\s,.]+/g, '');
@@ -323,8 +392,83 @@ function placeDiff(before, after, ctx) {
   });
 }
 
+// ---------- Kategorier, flöden och speditörer ----------
+// Bygger en kategori/ett flöde/en speditör av en importpost utan att ändra något i datan.
+// Finns den redan (samma namn) utgår den från den befintliga och bara fälten i filen ändras.
+function buildRegistry(kind, item, ctx) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('posten är inte ett objekt');
+  const name = str(pickKey(item, 'namn', 'name')).trim();
+  if (!name) throw new Error('"namn" saknas');
+  const existing = placeData[kind].find(x => sameName(x.name, name)) || null;
+  const x = existing ? clone(existing) : {
+    id: uid(), name,
+    color: PALETTE[(placeData[kind].length + ctx[kind].length + (kind === 'flows' ? 2 : 0)) % PALETTE.length],
+    icon: guessIcon(name) || DEFAULT_ICON[kind],
+    ...(kind === 'flows' ? { carrierId: null } : {}),
+    ...(kind === 'carriers' ? { note: '', contacts: [] } : {})
+  };
+  x.name = name;
+
+  const color = pickKey(item, 'farg', 'färg', 'color', 'colour');
+  if (color !== undefined) {
+    const c = parseColorInput(color);
+    if (!c) throw new Error(`ogiltig färg "${color}" (skriv t.ex. "#f28b82")`);
+    x.color = c;
+  }
+  const icon = pickKey(item, 'ikon', 'icon');
+  if (icon !== undefined) {
+    const ic = parseIconInput(icon);
+    if (!ic) throw new Error(`hittar ingen ikon "${icon}" – använd namnet från fontawesome.com, t.ex. "truck"`);
+    x.icon = ic;
+  }
+
+  if (kind === 'flows') {
+    const cname = str(pickKey(item, 'speditor', 'speditör', 'carrier')).trim();
+    if (cname) {
+      let s = findNamed(ctx, 'carriers', cname);
+      if (!s) {
+        s = { id: uid(), name: cname, color: PALETTE[(placeData.carriers.length + ctx.carriers.length) % PALETTE.length], icon: guessIcon(cname) || 'fa:truck', note: '', contacts: [] };
+        ctx.carriers.push(s);
+      }
+      x.carrierId = s.id;
+    }
+  }
+  if (kind === 'carriers') {
+    const note = pickKey(item, 'anteckning', 'note');
+    if (note !== undefined) x.note = str(note);
+    const cs = pickKey(item, 'kontakter', 'contacts');
+    if (cs !== undefined) {
+      if (!Array.isArray(cs)) throw new Error('"kontakter" ska vara en lista [ ... ]');
+      const list = cs.map(c => { const { flowId, ...rest } = parseContact(c, null); return rest; });
+      x.contacts = existing ? reuseIds(list, existing.contacts, contactSig) : list;
+    }
+  }
+  const norm = { categories: normCategory, flows: normFlow, carriers: normCarrier }[kind];
+  return { item: norm(x), existing };
+}
+
+// Innehållet som läsbar text per fält, för jämförelse av dubbletter
+function registryFacts(kind, x, ctx) {
+  const facts = { Namn: x.name, Färg: x.color, Ikon: iconLabel(x.icon) };
+  if (kind === 'flows') facts.Speditör = x.carrierId ? (findById(ctx, 'carriers', x.carrierId) || {}).name || '?' : '';
+  if (kind === 'carriers') {
+    facts.Anteckning = x.note;
+    facts.Kontakter = x.contacts.map(c => [c.name, c.role, c.phone, c.email].filter(Boolean).join(', ')).sort().join('\n');
+  }
+  return facts;
+}
+function registryDiff(kind, before, after, ctx) {
+  const a = registryFacts(kind, before, ctx);
+  const b = registryFacts(kind, after, ctx);
+  return Object.keys(a).map(field => ({ field, before: a[field], after: b[field], differs: a[field] !== b[field] }));
+}
+
 // ---------- Import ----------
 let importText = '';   // det som står i rutan, så att det finns kvar om man går tillbaka
+
+// Ser filen ut som en hel datafil från appen (med interna id:n)?
+const isAppDataFile = raw => raw && !Array.isArray(raw) && Array.isArray(raw.categories) && Array.isArray(raw.places) &&
+  (raw.app === 'TransportLathund' || raw.categories.some(c => c && c.id) || raw.places.some(p => p && p.id));
 
 async function runImport() {
   const log = el('importLog');
@@ -341,14 +485,24 @@ async function runImport() {
   }
 
   // En hel datafil från appen (med id:n) slås ihop direkt
-  if (raw && !Array.isArray(raw) && Array.isArray(raw.categories) && Array.isArray(raw.places)) {
+  if (isAppDataFile(raw)) {
     await importFullDataFile(raw, log);
     return;
   }
 
-  const list = Array.isArray(raw) ? raw : pickKey(raw, 'platser', 'places');
-  if (!Array.isArray(list)) {
-    log.append(h('div', { class: 'err' }, 'Hittade ingen lista med platser. Använd { "platser": [ ... ] } eller en lista [ ... ] som i exemplet.'));
+  // Listorna i filen. En lista [ ... ] direkt räknas som platser.
+  const lists = {};
+  if (Array.isArray(raw)) lists.places = raw;
+  else if (raw && typeof raw === 'object') {
+    for (const k of JSON_KINDS) {
+      const v = pickKey(raw, ...k.aliases);
+      if (v === undefined) continue;
+      if (!Array.isArray(v)) { log.append(h('div', { class: 'err' }, `"${k.json}" ska vara en lista [ ... ].`)); return; }
+      lists[k.key] = v;
+    }
+  }
+  if (!Object.keys(lists).length) {
+    log.append(h('div', { class: 'err' }, 'Hittade inget att importera. Filen ska innehålla minst en av listorna "platser", "kategorier", "floden" eller "speditorer" – se exemplet till vänster.'));
     return;
   }
 
@@ -357,9 +511,53 @@ async function runImport() {
   const progress = h('div', { class: 'muted' });
   log.append(progress);
   const ctx = newImportCtx();
+  ctx.explicit = new Set();   // id:n på nya poster som står i filen (läggs till även om ingen plats använder dem)
   const entries = [];
   const failed = [];
+
+  // Speditörer först, sedan flöden (som kan hänvisa till speditörer), kategorier och sist platser
+  for (const kind of ['carriers', 'flows', 'categories']) {
+    const seenNames = new Set();
+    arr(lists[kind]).forEach((item, i) => {
+      const label = str(pickKey(item, 'namn', 'name')) || `post nr ${i + 1}`;
+      const tag = `${KIND_SINGULAR[kind]} ${label}`;
+      const key = label.trim().toLowerCase();
+      if (seenNames.has(key)) { failed.push(`${tag}: finns två gånger i filen – den andra hoppades över.`); return; }
+      seenNames.add(key);
+      try {
+        const r = buildRegistry(kind, item, ctx);
+        if (!r.existing) { ctx[kind].push(r.item); ctx.explicit.add(r.item.id); }
+        entries.push({ kind, label, tag, place: r.item, existing: r.existing, matchedBy: 'name', notes: [], action: r.existing ? null : 'new' });
+      } catch (e) { failed.push(`${tag}: ${e.message}`); }
+    });
+  }
+
+  const list = arr(lists.places);
   const seen = new Map();   // namn → postnummer, för dubbletter inom filen
+
+  // Sök upp alla adresser som saknar koordinater, flera samtidigt (det är det som tar tid).
+  // buildPlace nedan får sedan svaren direkt ur cachen i geocodeWithFallback.
+  const toLookUp = [...new Set(list.map(item => {
+    if (!item || typeof item !== 'object') return '';
+    if (pickKey(item, 'lat', 'latitud', 'latitude') != null) return '';
+    const addr = str(pickKey(item, 'adress', 'address')).trim();
+    if (!addr) return '';
+    const { existing } = findExisting(str(pickKey(item, 'namn', 'name')).trim(), addr);
+    return existing && normAddr(addr) === normAddr(existing.address) ? '' : addr;   // behåller befintlig position
+  }).filter(Boolean))];
+  let looked = 0;
+  const total = toLookUp.length;
+  const lookUpNext = async () => {
+    while (toLookUp.length) {
+      const addr = toLookUp.shift();
+      try { await geocodeWithFallback(addr); } catch { /* buildPlace försöker igen och rapporterar felet */ }
+      progress.textContent = `Söker upp adresser: ${++looked} av ${total}…`;
+    }
+  };
+  if (toLookUp.length) {
+    progress.textContent = `Söker upp ${toLookUp.length} adresser…`;
+    await Promise.all(Array.from({ length: GEOCODE_WORKERS }, lookUpNext));
+  }
 
   for (let i = 0; i < list.length; i++) {
     const label = str(pickKey(list[i], 'namn', 'name')) || `post nr ${i + 1}`;
@@ -372,7 +570,7 @@ async function runImport() {
     seen.set(key, i + 1);
     try {
       const r = await buildPlace(list[i], ctx);
-      entries.push({ label, ...r, action: r.existing ? null : 'new' });
+      entries.push({ kind: 'places', label, tag: label, ...r, action: r.existing ? null : 'new' });
     } catch (e) {
       failed.push(`${label}: ${e.message}`);
     }
@@ -382,7 +580,7 @@ async function runImport() {
 
   // Dubbletter: identiska hoppas över direkt, resten får man ta ställning till
   entries.filter(e => e.existing).forEach(e => {
-    e.diff = placeDiff(e.existing, e.place, ctx);
+    e.diff = e.kind === 'places' ? placeDiff(e.existing, e.place, ctx) : registryDiff(e.kind, e.existing, e.place, ctx);
     if (!e.diff.some(d => d.differs)) { e.action = 'skip'; e.identical = true; }
   });
 
@@ -393,9 +591,9 @@ async function runImport() {
 
 // Steg 2 (vid behov): granska dubbletter
 const DUP_ACTIONS = [
-  { value: 'update', label: 'Skriv över', title: 'Ersätt den befintliga platsen med uppgifterna från filen' },
-  { value: 'skip', label: 'Behåll befintlig', title: 'Ignorera platsen i filen' },
-  { value: 'copy', label: 'Lägg till som ny', title: 'Behåll den befintliga och lägg till filens plats som en egen plats' }
+  { value: 'update', label: 'Skriv över', title: 'Uppdatera den befintliga med uppgifterna från filen (fält som inte finns i filen behålls)' },
+  { value: 'skip', label: 'Behåll befintlig', title: 'Ignorera posten i filen' },
+  { value: 'copy', label: 'Lägg till som ny', title: 'Behåll den befintliga och lägg till filens plats som en egen plats', placesOnly: true }
 ];
 
 function renderDuplicateReview(state) {
@@ -422,7 +620,7 @@ function renderDuplicateReview(state) {
       card.classList.toggle('undecided', !e.action);
       [...seg.children].forEach(b => b.classList.toggle('on', b.dataset.v === e.action));
     };
-    DUP_ACTIONS.forEach(a => seg.append(h('button', {
+    DUP_ACTIONS.filter(a => !a.placesOnly || e.kind === 'places').forEach(a => seg.append(h('button', {
       type: 'button', title: a.title, 'data-v': a.value,
       onclick: () => { e.action = a.value; paint(); updateFoot(); }
     }, a.label)));
@@ -430,11 +628,14 @@ function renderDuplicateReview(state) {
 
     const changed = e.diff.filter(d => d.differs);
     const same = e.diff.filter(d => !d.differs).map(d => d.field);
-    const reason = e.matchedBy === 'name' ? 'Samma namn' : `Samma adress som "${e.existing.name}"`;
+    const reason = e.kind !== 'places'
+      ? `${KIND_SINGULAR[e.kind]} med samma namn finns redan`
+      : e.matchedBy === 'name' ? 'Samma namn' : `Samma adress som "${e.existing.name}"`;
+    const icon = e.kind === 'places' ? findById(state.ctx, 'categories', e.place.categoryId) : e.existing;
     card.append(
       h('div', { class: 'dup-head' },
-        badge(findById(state.ctx, 'categories', e.place.categoryId), 26),
-        h('div', { class: 'spacer' }, h('strong', {}, e.label), h('div', { class: 'muted small' }, reason)),
+        badge(icon, 26),
+        h('div', { class: 'spacer' }, h('strong', {}, e.tag), h('div', { class: 'muted small' }, reason)),
         seg),
       h('table', { class: 'dup-diff' },
         h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', {}, 'Befintlig'), h('th', {}, 'Från filen'))),
@@ -448,22 +649,28 @@ function renderDuplicateReview(state) {
     return card;
   });
 
-  const setAll = action => { dups.forEach(e => { e.action = action; }); cards.forEach(c => c._paint()); updateFoot(); };
+  const setAll = action => {
+    dups.forEach(e => { e.action = action === 'copy' && e.kind !== 'places' ? 'skip' : action; });
+    cards.forEach(c => c._paint());
+    updateFoot();
+  };
 
   view.innerHTML = '';
   view.append(
     dlgHead([fa('clone'), ` Dubbletter (${dups.length})`], () => importDlg.close()),
     h('div', { class: 'dlg-body' },
       h('p', { class: 'hint', style: 'margin-top:0' },
-        `${dups.length} av platserna i filen finns redan (samma namn eller samma adress). Välj vad som ska hända med var och en. ` +
-        (newCount ? `${newCount} nya platser importeras också. ` : '') +
-        (identical ? `${identical} platser är identiska med de befintliga och hoppas över. ` : '') +
-        'Inget sparas förrän du klickar Importera.'),
+        `${dups.length} av posterna i filen finns redan (samma namn, eller för platser samma adress). Välj vad som ska hända med var och en. ` +
+        (newCount ? `${newCount} nya poster läggs också till. ` : '') +
+        (identical ? `${identical} poster är identiska med de befintliga och hoppas över. ` : '') +
+        'Inget ändras förrän du klickar Importera, och inget tas bort.'),
       h('div', { class: 'row dup-bulk' },
         h('span', { class: 'muted small' }, 'Alla dubbletter:'),
         h('button', { type: 'button', class: 'small secondary', onclick: () => setAll('update') }, 'Skriv över alla'),
         h('button', { type: 'button', class: 'small secondary', onclick: () => setAll('skip') }, 'Ignorera alla'),
-        h('button', { type: 'button', class: 'small secondary', onclick: () => setAll('copy') }, 'Lägg till alla som nya')),
+        dups.some(e => e.kind === 'places')
+          ? h('button', { type: 'button', class: 'small secondary', title: 'Gäller platser. Andra dubbletter ignoreras.', onclick: () => setAll('copy') }, 'Lägg till alla platser som nya')
+          : null),
       cards),
     h('div', { class: 'dlg-foot' },
       h('button', { type: 'button', class: 'secondary', onclick: () => openImportDialog() }, 'Avbryt import'),
@@ -475,10 +682,30 @@ function renderDuplicateReview(state) {
 // Steg 3: lägg in det som valts
 function commitImport(state) {
   const { ctx, entries, failed } = state;
-  const res = { added: [], updated: [], copied: [], skipped: [], identical: [], approx: [], cats: [], flows: [], carriers: [], linked: [], notes: [] };
+  const res = {
+    added: [], updated: [], copied: [], skipped: [], identical: [], approx: [], linked: [], notes: [],
+    cats: [], flows: [], carriers: [], regUpdated: []
+  };
+  const newList = { categories: res.cats, flows: res.flows, carriers: res.carriers };
   const done = [];
+  const touchedFlows = [];   // flöden som lagts till eller uppdaterats från filen
 
-  entries.forEach(e => {
+  // Kategorier, flöden och speditörer som står i filen
+  entries.filter(e => e.kind !== 'places').forEach(e => {
+    if (e.action === 'skip') { (e.identical ? res.identical : res.skipped).push(e.tag); return; }
+    if (e.action === 'update') {
+      const i = placeData[e.kind].findIndex(x => x.id === e.existing.id);
+      placeData[e.kind][i] = e.place;
+      res.regUpdated.push(e.tag);
+    } else {
+      placeData[e.kind].push(e.place);
+      newList[e.kind].push(e.label);
+    }
+    if (e.kind === 'flows') touchedFlows.push(e.place);
+  });
+
+  // Platser
+  entries.filter(e => e.kind === 'places').forEach(e => {
     if (e.action === 'skip') { (e.identical ? res.identical : res.skipped).push(e.label); return; }
     let p = e.place;
     if (e.action === 'copy') {
@@ -502,21 +729,25 @@ function commitImport(state) {
     if (p.approx) res.approx.push(p);
   });
 
-  // Nya kategorier/flöden/speditörer – bara de som används av något som importerades
+  // Kategorier/flöden/speditörer som skapades för att platserna (eller flödena) hänvisade till dem –
+  // bara de som faktiskt används av något som importerades
+  const has = (kind, id) => placeData[kind].some(x => x.id === id);
   const usedCats = new Set(done.map(p => p.categoryId));
   const usedFlows = new Set(done.flatMap(p => p.flows.map(pf => pf.flowId)));
-  ctx.categories.filter(c => usedCats.has(c.id)).forEach(c => { placeData.categories.push(c); res.cats.push(c.name); });
-  const addedFlows = ctx.flows.filter(f => usedFlows.has(f.id));
-  const usedCarriers = new Set(addedFlows.map(f => f.carrierId).filter(Boolean));
+  ctx.categories.filter(c => usedCats.has(c.id) && !has('categories', c.id)).forEach(c => { placeData.categories.push(c); res.cats.push(c.name); });
+  const addedFlows = ctx.flows.filter(f => usedFlows.has(f.id) && !has('flows', f.id));
+  addedFlows.forEach(f => { placeData.flows.push(f); res.flows.push(f.name); });
+  touchedFlows.push(...addedFlows);
   ctx.flowCarriers.filter(fc => usedFlows.has(fc.flowId)).forEach(({ flowId, carrierId }) => {
     const f = flowById(flowId);
-    if (f && !f.carrierId) { f.carrierId = carrierId; usedCarriers.add(carrierId); }
+    if (f && !f.carrierId) { f.carrierId = carrierId; touchedFlows.push(f); }
   });
-  ctx.carriers.filter(s => usedCarriers.has(s.id)).forEach(s => { placeData.carriers.push(s); res.carriers.push(s.name); });
-  addedFlows.forEach(f => { placeData.flows.push(f); res.flows.push(f.name); });
-  placeData.flows.filter(f => usedFlows.has(f.id) && f.carrierId && usedCarriers.has(f.carrierId))
-    .forEach(f => res.linked.push(`${f.name} → ${(carrierById(f.carrierId) || {}).name}`));
+  const usedCarriers = new Set(touchedFlows.map(f => f.carrierId).filter(Boolean));
+  ctx.carriers.filter(s => usedCarriers.has(s.id) && !has('carriers', s.id)).forEach(s => { placeData.carriers.push(s); res.carriers.push(s.name); });
+  [...new Set(touchedFlows)].filter(f => f.carrierId && carrierById(f.carrierId))
+    .forEach(f => res.linked.push(`${f.name} → ${carrierById(f.carrierId).name}`));
   usedCats.forEach(id => setCatVisible(id, true));
+  res.cats.forEach(name => { const c = placeData.categories.find(x => x.name === name); if (c) setCatVisible(c.id, true); });
 
   refreshPlaces();
   openImportDialog();
@@ -540,10 +771,12 @@ function showImportResult(res, failed) {
         onclick: () => { listFilter.pos = 'approx'; importDlg.close(); openPlacesDialog(); }
       }, 'Visa alla uppskattade i platslistan'))
     : null;
-  const total = res.added.length + res.updated.length + res.copied.length;
+  const nNew = res.added.length + res.cats.length + res.flows.length + res.carriers.length;
+  const nUpd = res.updated.length + res.regUpdated.length;
+  const total = nNew + nUpd + res.copied.length;
   log.append(...[
     h('div', { class: failed.length ? 'err' : 'ok' },
-      `Klart: ${res.added.length} nya, ${res.updated.length} uppdaterade` +
+      `Klart: ${nNew} nya, ${nUpd} uppdaterade` +
       (res.copied.length ? `, ${res.copied.length} tillagda som nya` : '') +
       (res.skipped.length + res.identical.length ? `, ${res.skipped.length + res.identical.length} hoppades över` : '') +
       `, ${failed.length} misslyckades.`),
@@ -551,22 +784,23 @@ function showImportResult(res, failed) {
     section('ok', 'Nya platser', res.added),
     section('ok', 'Uppdaterade platser', res.updated),
     section('ok', 'Dubbletter tillagda som nya platser', res.copied),
-    section('muted', 'Dubbletter som ignorerades', res.skipped),
-    section('muted', 'Identiska med befintliga (hoppades över)', res.identical),
     section('ok', 'Nya kategorier', res.cats),
     section('ok', 'Nya flöden', res.flows),
-    section('ok', 'Nya speditörer (lägg in kontaktuppgifter under Speditörer)', res.carriers),
+    section('ok', 'Nya speditörer', res.carriers),
+    section('ok', 'Uppdaterade kategorier, flöden och speditörer', res.regUpdated),
     section('ok', 'Speditör kopplad till flöde', res.linked),
+    section('muted', 'Dubbletter som ignorerades', res.skipped),
+    section('muted', 'Identiska med befintliga (hoppades över)', res.identical),
     section('err', 'Obs', res.notes),
     section('err', 'Misslyckades', failed),
     total
-      ? h('p', { class: 'hint' }, 'Importen syns nu som ändringar uppe till höger. Där kan du granska, ångra enskilda platser och spara till fil.')
+      ? h('p', { class: 'hint' }, 'Importen syns nu som ändringar under Data. Där kan du granska och ångra enskilda poster. Glöm inte att exportera till Excel.')
       : null].filter(Boolean));
 }
 
 async function importFullDataFile(raw, log) {
   const d = normalizeData(raw);
-  if (!await uiConfirm(`Det här ser ut som en hel datafil från appen (${countText(d)}).\n\nSlå ihop den med nuvarande data? Poster med samma id ersätts.\n\nVill du i stället ersätta allt med filen, använd "Öppna datafil" (klicka på statusrutan uppe till höger).`, 'Slå ihop')) return;
+  if (!await uiConfirm(`Det här ser ut som en hel datafil från appen (${countText(d)}).\n\nSlå ihop den med det som finns på sidan? Poster med samma interna id ersätts, övriga läggs till. Inget tas bort.\n\nVill du i stället ersätta allt, använd en Excel-fil (Data → Öppna fil).`, 'Slå ihop')) return;
   const upsert = (list, items) => items.forEach(it => {
     const i = list.findIndex(x => x.id === it.id);
     if (i >= 0) list[i] = it; else list.push(it);
@@ -580,9 +814,11 @@ async function importFullDataFile(raw, log) {
 }
 
 // ---------- Modal ----------
+// Inställningarna i formatguiden (vilka typer, minimal/komplett, adress/koordinater)
+const jsonGuide = { kinds: ['places'], level: 'min', pos: 'adress' };
+
 function openImportDialog() {
-  const exampleText = JSON.stringify(IMPORT_EXAMPLE, null, 2);
-  const textarea = h('textarea', { id: 'importText', spellcheck: false, placeholder: 'Klistra in JSON här, eller välj en fil…', value: importText });
+  const textarea = h('textarea', { id: 'importText', spellcheck: false, placeholder: 'Klistra in din JSON här, eller välj en fil…', value: importText });
   const fileInput = h('input', {
     type: 'file', accept: '.json,application/json,text/plain', hidden: true,
     onchange: async e => {
@@ -592,44 +828,85 @@ function openImportDialog() {
     }
   });
 
-  const copyBtn = h('button', { type: 'button', class: 'small secondary' }, 'Kopiera exempel');
+  // Guiden: knappar för inställningar, exempel och fältlista som uppdateras när man klickar
+  const guide = h('div', { class: 'json-guide' });
+  const exampleText = () => JSON.stringify(buildJsonExample(jsonGuide.kinds, jsonGuide.level, jsonGuide.pos), null, 2);
+  const copyBtn = h('button', { type: 'button', class: 'small secondary' }, fa('copy'), ' Kopiera');
   copyBtn.onclick = async () => {
-    try { await navigator.clipboard.writeText(exampleText); copyBtn.textContent = 'Kopierat ✓'; }
-    catch { textarea.value = exampleText; copyBtn.textContent = 'Inklistrat i rutan'; }
-    setTimeout(() => { copyBtn.textContent = 'Kopiera exempel'; }, 2000);
+    try { await navigator.clipboard.writeText(exampleText()); copyBtn.textContent = 'Kopierat'; }
+    catch { textarea.value = exampleText(); copyBtn.textContent = 'Inklistrat i rutan'; }
+    setTimeout(() => { copyBtn.replaceChildren(fa('copy'), ' Kopiera'); }, 2000);
   };
+
+  const seg = (options, current, onPick) => h('div', { class: 'seg' }, options.map(([v, label]) =>
+    h('button', { type: 'button', class: v === current ? 'on' : '', onclick: () => onPick(v) }, label)));
+
+  const renderGuide = () => {
+    const k = jsonGuide.kinds;
+    const kindBtns = h('div', { class: 'json-kinds' }, JSON_KINDS.map(t => h('button', {
+      type: 'button', class: 'json-kind' + (k.includes(t.key) ? ' on' : ''), 'aria-pressed': String(k.includes(t.key)),
+      onclick: () => {
+        jsonGuide.kinds = k.includes(t.key) ? k.filter(x => x !== t.key) : [...k, t.key];
+        if (!jsonGuide.kinds.length) jsonGuide.kinds = [t.key];   // minst en
+        renderGuide();
+      }
+    }, fa(t.icon), ' ', t.label)));
+
+    const fieldRows = JSON_KINDS.filter(t => k.includes(t.key)).flatMap(t => [
+      h('tr', { class: 'jf-kind' }, h('th', { colspan: 3 }, `${t.label} – listan "${t.json}"`)),
+      ...JSON_FIELDS[t.key].map(f => h('tr', { class: f.full && jsonGuide.level === 'min' ? 'jf-extra' : '' },
+        h('td', {}, h('code', {}, f.f.trim()), f.f.startsWith('  ') ? h('span', { class: 'muted small' }, ' (i flöde)') : null),
+        h('td', {}, f.req ? h('span', { class: 'jf-req' }, 'Krävs') : h('span', { class: 'muted' }, 'Valfri')),
+        h('td', {}, f.d)))
+    ]);
+
+    guide.replaceChildren(
+      h('div', { class: 'json-opt' }, h('div', { class: 'json-opt-label' }, '1. Vad vill du importera?'), kindBtns),
+      h('div', { class: 'json-opt' }, h('div', { class: 'json-opt-label' }, '2. Hur mycket?'),
+        seg([['min', 'Minimal – bara det som krävs'], ['full', 'Komplett – alla fält']], jsonGuide.level, v => { jsonGuide.level = v; renderGuide(); })),
+      k.includes('places')
+        ? h('div', { class: 'json-opt' }, h('div', { class: 'json-opt-label' }, '3. Platsernas position'),
+          seg([['adress', 'Adress'], ['koordinater', 'Koordinater (lat/lon)']], jsonGuide.pos, v => { jsonGuide.pos = v; renderGuide(); }))
+        : null,
+      h('div', { class: 'row', style: 'margin:14px 0 6px' },
+        h('h3', { style: 'margin:0', class: 'spacer' }, 'Så här ska din JSON se ut'),
+        copyBtn,
+        h('button', { type: 'button', class: 'small secondary', onclick: () => { textarea.value = exampleText(); } }, 'Använd i rutan'),
+        h('button', { type: 'button', class: 'small secondary', onclick: () => downloadFile('transportlathund-importmall.json', exampleText()) }, fa('download'), ' Mall')),
+      h('pre', { class: 'example' }, exampleText()),
+      h('h3', {}, 'Fälten'),
+      h('table', { class: 'json-fields' }, h('tbody', {}, fieldRows)),
+      h('ul', { class: 'rules' },
+        h('li', {}, 'Ta med bara de listor du behöver. Vill du bara lägga till platser räcker "platser" (eller en lista [ ... ] direkt).'),
+        h('li', {}, 'Kategorier, flöden och speditörer som platserna hänvisar till men som inte finns skapas automatiskt.'),
+        h('li', {}, 'Saknas ett exakt husnummer i kartdatan används vägen eller orten. Sådana platser får en uppskattad position (streckad kant och "?" på kartan) som du kan justera.'),
+        h('li', {}, 'Finns något redan (samma namn, eller samma adress för platser) får du se skillnaderna och välja per post. "Skriv över" ändrar bara fälten som står i filen.'),
+        h('li', {}, 'Engelska fältnamn fungerar också (name, address, category, flows, times, color, icon …).')));
+  };
+  renderGuide();
 
   const view = el('importView');
   view.innerHTML = '';
   view.append(
-    dlgHead([fa('file-import'), ' Importera platser från JSON'], () => importDlg.close()),
+    dlgHead([fa('code'), ' Importera från JSON'], () => importDlg.close()),
     h('div', { class: 'dlg-body' },
+      h('div', { class: 'notice json-notice' },
+        h('strong', {}, 'JSON-import kompletterar det som finns – inget tas bort. '),
+        'Nya poster läggs till. Finns något redan får du välja om det ska skrivas över eller behållas. ',
+        'Vill du i stället ersätta allt på sidan, använd en Excel-fil (Data → Öppna fil).'),
       h('div', { class: 'import-grid' },
+        guide,
         h('div', {},
           h('h3', { style: 'margin-top:0' }, 'Din JSON'),
           textarea,
           h('div', { class: 'row', style: 'margin-top:8px' },
-            h('label', { class: 'btn secondary' }, 'Välj fil…', fileInput),
-            h('button', { type: 'button', class: 'secondary', onclick: () => { textarea.value = exampleText; } }, 'Använd exemplet'),
+            h('label', { class: 'btn secondary' }, fa('folder-open'), ' Välj fil…', fileInput),
             h('span', { class: 'spacer' }),
-            h('button', { type: 'button', id: 'importRun', onclick: runImport }, 'Importera')),
-          h('div', { id: 'importLog', class: 'import-log' })),
-        h('div', {},
-          h('div', { class: 'row', style: 'margin-bottom:8px' },
-            h('h3', { style: 'margin:0', class: 'spacer' }, 'Exempel på struktur'),
-            copyBtn,
-            h('button', { type: 'button', class: 'small secondary', onclick: () => downloadFile('transportlathund-importmall.json', exampleText) }, 'Ladda ner mall')),
-          h('pre', { class: 'example' }, exampleText),
-          h('h3', {}, 'Regler'),
-          h('ul', { class: 'rules' },
-            h('li', {}, h('b', {}, 'Krävs: '), '"namn", "kategori" och antingen "adress" eller "lat" + "lon".'),
-            h('li', {}, 'Har platsen bara adress söks koordinaterna upp automatiskt (i Sverige). Hittas inte husnumret används vägen, och annars orten. Sådana platser får en uppskattad position som visas med streckad kant och ? på kartan, så att du kan justera dem. Har platsen bara koordinater söks adressen upp.'),
-            h('li', {}, 'Kategorier, flöden och speditörer som inte finns skapas automatiskt (med ikon om namnet känns igen).'),
-            h('li', {}, '"speditor" i ett flöde anger vem som kör flödet, t.ex. "PostNord". Den kopplas till flödet (gäller alla platser) om flödet inte redan har en speditör. Kontaktuppgifter läggs in under Speditörer.'),
-            h('li', {}, 'Finns redan en plats med samma namn eller samma adress får du se skillnaderna och välja per plats: skriv över, behåll befintlig eller lägg till som ny. Skriv över ersätter fälten som finns i filen, övriga behålls.'),
-            h('li', {}, '"typ": "hämtning" eller "leverans". Tider skrivs "09:00"; "till" är valfri sluttid.'),
-            h('li', {}, '"dagar": t.ex. "mån-fre", "vardagar", "helg", "alla", "mån,ons,fre" eller ["mån","ons"]. Utelämnat = mån–fre.'),
-            h('li', {}, 'Alla fält utom namn och kategori är valfria. Engelska fältnamn (name, address, flows, times …) fungerar också.'),
-            h('li', {}, 'Du kan också klistra in en lista [ {...}, {...} ] direkt, utan "platser".'))))));
-  if (!importDlg.open) importDlg.showModal();
+            h('button', { type: 'button', id: 'importRun', onclick: runImport }, fa('file-import'), ' Importera')),
+          h('div', { id: 'importLog', class: 'import-log' })))),
+    h('div', { class: 'dlg-foot' },
+      h('span', { class: 'spacer muted small' }, 'Reservkopia av allt som JSON (kan läsas in här igen):'),
+      h('button', { type: 'button', class: 'secondary small', onclick: saveToFile }, fa('download'), ' Ladda ner som JSON')));
+  closeAllDialogs();
+  importDlg.showModal();
 }

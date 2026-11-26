@@ -3,7 +3,7 @@
 // Så fungerar det:
 // - All data sparas löpande i webbläsaren (localStorage) där sidan används, så inget försvinner vid omladdning.
 // - "Spara till fil" laddar ner allt som en JSON-fil (säkerhetskopia, eller för att flytta till en annan dator).
-// - "Öppna datafil" läser in en sådan fil och ersätter det som finns i webbläsaren.
+// - "Öppna fil" läser in en sådan fil (eller en Excel-fil, se excel.js) och ersätter det som finns i webbläsaren.
 // - "baseline" är innehållet i den senast sparade/inlästa filen. Ändringar = skillnaden mot den,
 //   per plats/kategori/flöde/speditör. Varje ändring kan ångras för sig.
 // - Finns ingen data i webbläsaren vid start visas en välkomstruta där man kan läsa in en fil.
@@ -26,19 +26,20 @@ try { navigator.storage && navigator.storage.persist && navigator.storage.persis
 
 const baseData = () => (baseline ? baseline.data : emptyData());
 
-function setBaseline(fileName, savedAt) {
-  baseline = { data: clone(placeData), fileName, savedAt: savedAt || new Date().toISOString() };
+// how: 'export' (filen laddades ner härifrån) eller 'open' (filen lästes in)
+function setBaseline(fileName, savedAt, how = 'export') {
+  baseline = { data: clone(placeData), fileName, savedAt: savedAt || new Date().toISOString(), how };
   store(BASELINE_KEY, JSON.stringify(baseline));
 }
 
 // ---------- Beräkna ändringar ----------
-function computeChanges() {
-  const base = baseData();
+// Skillnaden mellan två versioner av datan, per plats/kategori/flöde/speditör
+function diffData(base, current) {
   const out = [];
   for (const kind of KINDS) {
     const before = new Map(base[kind].map(x => [x.id, x]));
-    const now = new Set(placeData[kind].map(x => x.id));
-    for (const item of placeData[kind]) {
+    const now = new Set(current[kind].map(x => x.id));
+    for (const item of current[kind]) {
       const b = before.get(item.id);
       if (!b) out.push({ kind, type: 'added', id: item.id, item });
       else if (JSON.stringify(b) !== JSON.stringify(item)) out.push({ kind, type: 'modified', id: item.id, item, before: b });
@@ -49,12 +50,16 @@ function computeChanges() {
   }
   return out;
 }
+const computeChanges = () => diffData(baseData(), placeData);   // ändringar sedan senaste export/inläsning
 
 // Slår upp kategori/flöde även om det bara finns i baseline (t.ex. borttaget)
-const anyCat = id => catById(id) || baseData().categories.find(c => c.id === id);
-const anyFlow = id => flowById(id) || baseData().flows.find(f => f.id === id);
+// eller i en fil som håller på att läsas in (lookupExtra, sätts av excel.js)
+let lookupExtra = null;
+const findIn = (kind, id) => baseData()[kind].find(x => x.id === id) || (lookupExtra ? lookupExtra[kind].find(x => x.id === id) : undefined);
+const anyCat = id => catById(id) || findIn('categories', id);
+const anyFlow = id => flowById(id) || findIn('flows', id);
 const flowName = id => (anyFlow(id) || {}).name || 'okänt flöde';
-const anyCarrier = id => carrierById(id) || baseData().carriers.find(s => s.id === id);
+const anyCarrier = id => carrierById(id) || findIn('carriers', id);
 const carrierName = id => (id ? (anyCarrier(id) || {}).name || 'okänd speditör' : 'ingen');
 const contactLabel = c => c.name || c.role || c.phone || c.email || 'kontakt';
 
@@ -186,8 +191,8 @@ async function undoAll() {
   const n = computeChanges().length;
   if (!n) return;
   const msg = baseline
-    ? `Ångra alla ${n} ändringar och återgå till ${baseline.fileName || 'senast sparade läge'}?`
-    : 'Det finns ingen sparad datafil ännu. Att ångra allt tömmer alla platser, kategorier och flöden. Fortsätta?';
+    ? `Ångra alla ${n} ändringar och återgå till hur det var i ${baseline.fileName || 'senaste filen'}?`
+    : 'Ingen fil har exporterats eller lästs in ännu, så att ångra allt tömmer alla platser, kategorier, flöden och speditörer. Fortsätta?';
   if (!await uiConfirm(msg, 'Ångra alla', true)) return;
   placeData = clone(baseData());
   refreshPlaces();
@@ -205,9 +210,9 @@ function fmtDate(iso) {
 const countText = d => `${arr(d.places).length} platser, ${arr(d.categories).length} kategorier, ${arr(d.flows).length} flöden` +
   (arr(d.carriers).length ? `, ${arr(d.carriers).length} speditörer` : '');
 
-function downloadFile(name, text) {
+function downloadFile(name, content, type = 'application/json') {
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+  a.href = URL.createObjectURL(new Blob([content], { type }));
   a.download = name;
   document.body.append(a);
   a.click();
@@ -224,27 +229,21 @@ function saveToFile() {
   updateStatus();
 }
 
-// Läs in en datafil (ersätter allt i webbläsaren)
-const fileOpener = h('input', { type: 'file', accept: '.json,application/json', hidden: true });
+// Läs in en Excel-fil (ersätter allt i webbläsaren, efter en förhandsvisning – se excel.js).
+// JSON läses in via JSON-knappen under Data (import.js) och kompletterar i stället.
+const XLSX_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+const fileOpener = h('input', { type: 'file', accept: `.xlsx,${XLSX_TYPE}`, hidden: true });
 document.body.append(fileOpener);
-let openingFromWelcome = false;   // välkomstrutan: inget att ersätta, så ingen fråga
+let openingFromWelcome = false;   // välkomstrutan
 fileOpener.onchange = async () => {
   const f = fileOpener.files[0];
   fileOpener.value = '';
-  if (!f) return;
-  let raw;
-  try { raw = JSON.parse(await f.text()); } catch (e) { uiAlert('Filen är inte giltig JSON: ' + e.message); return; }
-  if (!raw || !Array.isArray(raw.categories) || !Array.isArray(raw.places)) {
-    uiAlert('Filen ser inte ut som en datafil från TransportLathund.\n\nFör att lägga till platser från en egen lista, använd Platser → Importera JSON.');
-    return;
-  }
-  const d = normalizeData(raw);
-  const ask = !openingFromWelcome;
   openingFromWelcome = false;
-  if (ask && !await uiConfirm(`Öppna ${f.name}?\n${countText(d)}\n\nAllt som finns sparat i webbläsaren nu (${countText(placeData)}) ersätts.`, 'Öppna', true)) return;
-  placeData = d;
-  setBaseline(f.name, raw.savedAt);
-  refreshPlaces();
+  if (!f) return;
+  if (/\.xlsx$/i.test(f.name)) { importExcelFile(f); return; }   // excel.js
+  if (/\.xls$/i.test(f.name)) { uiAlert('Det gamla Excel-formatet (.xls) stöds inte. Spara filen som .xlsx i Excel och försök igen.'); return; }
+  if (/\.json$/i.test(f.name)) { uiAlert('JSON-filer läses in via JSON-knappen under Data. Den importen kompletterar det som finns i stället för att ersätta allt.'); return; }
+  uiAlert('Välj en Excel-fil (.xlsx).');
 };
 fileOpener.addEventListener('cancel', () => { openingFromWelcome = false; });
 const openDataFile = () => fileOpener.click();
@@ -256,20 +255,39 @@ function updateStatus() {
   box.innerHTML = '';
   box.classList.toggle('dirty', n > 0);
 
-  if (!baseline) {
-    box.append(h('button', { type: 'button', title: 'Läs in en sparad JSON-fil', onclick: openDataFile }, fa('folder-open'), ' Öppna datafil'));
-  }
   if (n) {
     box.append(
-      h('button', { type: 'button', title: 'Visa ändringar sedan senaste fil', onclick: openChangesDialog },
-        h('span', { class: 'ss-dot' }, '●'), ` ${n} ${n === 1 ? 'ändring' : 'ändringar'} ej i fil`),
-      h('button', { type: 'button', class: 'ss-save', title: 'Ladda ner all data som JSON (Ctrl+S)', onclick: saveToFile }, fa('download'), ' Spara till fil'));
+      h('button', { type: 'button', title: 'Visa ändringar sedan senaste export (de finns sparade i webbläsaren)', onclick: openChangesDialog },
+        h('span', { class: 'ss-dot' }, '●'), ` ${n} ${n === 1 ? 'ändring' : 'ändringar'}`, h('span', { class: 'ss-long' }, ' ej exporterade')),
+      h('button', { type: 'button', class: 'ss-save', title: 'Ladda ner all data som Excel-fil (Ctrl+S)', onclick: () => exportToExcel() }, fa('file-excel'), ' Exportera', h('span', { class: 'ss-xl' }, ' till Excel')));
   } else if (baseline && baseline.fileName) {
-    box.append(h('button', { type: 'button', title: baseline.fileName, onclick: openChangesDialog },
-      h('span', { class: 'ss-ok' }, fa('check')), ` Sparat ${fmtDate(baseline.savedAt)}`));
+    const what = baseline.how === 'open' ? 'Inläst från fil' : `Exporterat ${fmtDate(baseline.savedAt)}`;
+    box.append(h('button', { type: 'button', title: `${baseline.fileName} (${fmtDate(baseline.savedAt)})`, onclick: openChangesDialog },
+      h('span', { class: 'ss-ok' }, fa('check')), ' ' + what));
   }
+  placeStatus();
   if (changesDlg.open) renderChangesView();
 }
+
+// Statusrutan sitter uppe till höger. Är fönstret så smalt att den skulle krocka med
+// menyn eller sökfältet flyttas den ner precis under dem (fortfarande till höger).
+function placeStatus() {
+  const box = el('saveStatus');
+  box.style.top = '';
+  box.classList.remove('compact');
+  if (!box.firstChild) return;
+  const parts = [...document.querySelectorAll('#topbar .menubar, #topbar .filterbar > *')].map(x => x.getBoundingClientRect());
+  const collides = () => {
+    const a = box.getBoundingClientRect();
+    return parts.some(r => r.left < a.right + 8 && r.right > a.left - 8 && r.top < a.bottom && r.bottom > a.top);
+  };
+  if (!collides()) return;
+  box.classList.add('compact');   // först: kortare text ("3 ändringar")
+  if (!collides()) return;
+  box.style.top = Math.max(...parts.map(r => r.bottom)) + 8 + 'px';   // sedan: ner under menyn
+}
+window.addEventListener('resize', placeStatus);
+if (document.fonts) document.fonts.ready.then(placeStatus);   // bredden ändras när ikonerna och typsnitten laddats
 
 // Anropas av places.js varje gång datan ändras
 function onDataChanged() { updateStatus(); }
@@ -277,75 +295,99 @@ function onDataChanged() { updateStatus(); }
 // ---------- Modal: ändringar ----------
 function openChangesDialog() {
   closeAllDialogs();
+  rowUndoUnlocked = false;
   renderChangesView();
   changesDlg.showModal();
 }
 
 function fileInfo() {
-  const parts = [h('div', { class: 'muted small' }, 'All data sparas automatiskt i den här webbläsaren. Spara till fil för att ha en säkerhetskopia, eller för att flytta datan till en annan dator eller webbläsare.')];
+  const parts = [h('div', { class: 'muted small' }, 'Excel-filen är huvudkopian: exportera, redigera i Excel och läs in den här igen. Inläsning ersätter allt på sidan, men du får se skillnaderna först. Allt du ändrar här sparas också automatiskt i den här webbläsaren, så inget försvinner om du glömmer att exportera.')];
   if (baseline && baseline.fileName) {
     parts.unshift(h('div', {}, 'Senaste fil: ', h('code', {}, baseline.fileName), ` (${fmtDate(baseline.savedAt)})`));
   } else {
-    parts.unshift(h('div', {}, 'Ingen fil sparad eller inläst ännu.'));
+    parts.unshift(h('div', {}, 'Ingen fil exporterad eller inläst ännu.'));
   }
-  return h('div', { class: 'file-info' },
-    h('div', { class: 'fi-main' }, parts),
-    h('button', { type: 'button', class: 'secondary small', onclick: openDataFile }, fa('folder-open'), ' Öppna datafil'));
+  return h('div', { class: 'file-info' }, h('div', { class: 'fi-main' }, parts));
+}
+
+// Ångra-knapparna på enskilda rader är låsta tills man låser upp dem, så att man inte råkar
+// ta bort något viktigt med ett felklick. Låses igen varje gång rutan öppnas.
+let rowUndoUnlocked = false;
+
+// Ändringarna som listor per typ (Platser, Kategorier …). extra(ch) kan lägga till en knapp per rad.
+// Borttagna visas först, eftersom de är lättast att missa.
+const TYPE_ORDER = { removed: 0, modified: 1, added: 2 };
+function changeGroups(changes, extra) {
+  return KINDS.map(kind => {
+    const list = changes.filter(c => c.kind === kind).sort((a, b) => TYPE_ORDER[a.type] - TYPE_ORDER[b.type]);
+    if (!list.length) return null;
+    return h('div', { class: 'chg-group' }, h('h3', {}, `${KIND_LABEL[kind]} (${list.length})`),
+      list.map(ch => {
+        const icon = ch.kind === 'places' ? anyCat(ch.item.categoryId) : ch.item;
+        const lines = describe(ch);
+        return h('div', { class: 'chg-row' },
+          badge(icon),
+          h('div', { class: 'chg-main' },
+            h('div', {}, h('span', { class: 'chg-type ' + ch.type }, TYPE_LABEL[ch.type]), h('strong', {}, ch.item.name)),
+            lines.length ? h('ul', {}, lines.map(l => h('li', {}, l))) : null),
+          extra ? extra(ch) : null);
+      }));
+  }).filter(Boolean);
 }
 
 function renderChangesView() {
   const view = el('changesView');
   const changes = computeChanges();
-  const body = h('div', { class: 'dlg-body' }, fileInfo());
+  const n = changes.length;
 
-  if (!changes.length) {
-    body.append(h('div', { class: 'empty' }, 'Inga ändringar sedan senaste fil.'));
-  }
-  for (const kind of KINDS) {
-    const list = changes.filter(c => c.kind === kind);
-    if (!list.length) continue;
-    const group = h('div', { class: 'chg-group' }, h('h3', {}, `${KIND_LABEL[kind]} (${list.length})`));
-    list.forEach(ch => {
-      const icon = ch.kind === 'places' ? anyCat(ch.item.categoryId) : ch.item;
-      const lines = describe(ch);
-      group.append(h('div', { class: 'chg-row' },
-        badge(icon),
-        h('div', { class: 'chg-main' },
-          h('div', {}, h('span', { class: 'chg-type ' + ch.type }, TYPE_LABEL[ch.type]), h('strong', {}, ch.item.name)),
-          lines.length ? h('ul', {}, lines.map(l => h('li', {}, l))) : null),
-        h('button', { type: 'button', class: 'small secondary', title: 'Återställ till hur det var i senaste filen', onclick: () => undoChange(ch) }, '↶ Ångra')));
-    });
-    body.append(group);
-  }
+  // Ändringarna i en egen ram, med Ångra alla och låset för enskilda rader i ramens överkant
+  const lockBtn = h('button', {
+    type: 'button', class: 'small secondary' + (rowUndoUnlocked ? ' unlocked' : ''),
+    title: rowUndoUnlocked ? 'Lås Ångra-knapparna igen' : 'Lås upp för att kunna ångra enskilda ändringar',
+    onclick: () => { rowUndoUnlocked = !rowUndoUnlocked; renderChangesView(); }
+  }, fa(rowUndoUnlocked ? 'lock-open' : 'lock'), rowUndoUnlocked ? ' Lås igen' : ' Lås upp ångra per rad');
+  const box = h('section', { class: 'chg-box' },
+    h('div', { class: 'chg-box-head' },
+      h('h3', { class: 'spacer' }, n ? `Ändringar sedan senaste export (${n})` : 'Ändringar sedan senaste export'),
+      n ? lockBtn : null,
+      h('button', { type: 'button', class: 'small danger', disabled: !n, onclick: undoAll }, fa('rotate-left'), ' Ångra alla')),
+    n ? null : h('div', { class: 'empty' }, 'Inga ändringar sedan senaste export.'),
+    n && !rowUndoUnlocked ? h('div', { class: 'muted small chg-locked-hint' }, fa('lock'), ' Ångra-knapparna på raderna är låsta så att inget tas bort av misstag. Klicka på "Lås upp ångra per rad" för att använda dem.') : null,
+    ...changeGroups(changes, ch => h('button', {
+      type: 'button', class: 'small secondary', disabled: !rowUndoUnlocked,
+      title: rowUndoUnlocked ? 'Återställ till hur det var i senaste filen' : 'Låst – klicka på "Lås upp ångra per rad" först',
+      onclick: () => undoChange(ch)
+    }, fa(rowUndoUnlocked ? 'rotate-left' : 'lock'), ' Ångra')));
 
   view.innerHTML = '';
   view.append(
-    dlgHead(changes.length ? `Ändringar sedan senaste fil (${changes.length})` : 'Data och fil', () => changesDlg.close()),
-    body,
+    dlgHead('Data', () => changesDlg.close()),
+    h('div', { class: 'dlg-body' }, fileInfo(), box),
     h('div', { class: 'dlg-foot' },
-      h('button', { type: 'button', class: 'danger', disabled: !changes.length, onclick: undoAll }, 'Ångra alla'),
-      h('span', { class: 'spacer muted small' }, 'Tips: Ctrl+S sparar till fil'),
-      h('button', { type: 'button', onclick: saveToFile }, fa('download'), ' Spara till fil')));
+      h('button', { type: 'button', title: 'Läs in en Excel-fil. Ersätter allt på sidan – du får se skillnaderna först.', onclick: openDataFile }, fa('file-import'), ' Importera från Excel'),
+      h('button', { type: 'button', title: 'Ladda ner all data som Excel-fil (Ctrl+S)', onclick: () => exportToExcel() }, fa('file-export'), ' Exportera till Excel'),
+      h('button', { type: 'button', class: 'secondary', title: 'Importera platser, kategorier, flöden eller speditörer från JSON. Kompletterar det som finns, tar inte bort något.', onclick: () => openImportDialog() }, fa('code'), ' JSON'),
+      h('span', { class: 'spacer muted small', style: 'text-align:right' }, 'Ctrl+S exporterar till Excel')));
 }
 
-// Ctrl+S sparar
+// Ctrl+S exporterar till Excel
 document.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
     e.preventDefault();
-    saveToFile();
+    exportToExcel();
   }
 });
 
 // ---------- Välkomstruta när inget finns sparat i webbläsaren ----------
 async function showWelcome() {
   const choice = await uiDialog(
-    'Välkommen till TransportLathund!\n\nDet finns ingen data sparad i den här webbläsaren. Har du en sparad JSON-fil kan du läsa in den. Annars börjar du med några standardkategorier och flöden.',
+    'Välkommen till TransportLathund!\n\nDet finns ingen data sparad i den här webbläsaren. Har du en Excel-fil från TransportLathund kan du läsa in den. Annars börjar du med en tom lathund.',
     { buttons: [
       { label: 'Börja från början', value: 'fresh', class: 'secondary' },
-      { label: 'Läs in JSON-fil…', value: 'file' }
+      { label: 'Läs in Excel-fil…', value: 'file' }
     ] });
   if (choice === 'file') { openingFromWelcome = true; openDataFile(); }
-  else persistPlaces();   // spara standarddatan så att rutan inte visas igen
+  else persistPlaces();   // spara den tomma datan så att rutan inte visas igen
 }
 
 // ---------- Start ----------

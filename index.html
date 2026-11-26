@@ -20,10 +20,12 @@
       <button type="button" data-open="flows"><i class="fa-solid fa-arrows-rotate"></i> Flöden</button>
       <button type="button" data-open="categories"><i class="fa-solid fa-tags"></i> Kategorier</button>
       <button type="button" data-open="carriers"><i class="fa-solid fa-truck"></i> Speditörer</button>
+      <button type="button" data-open="data" title="Spara, öppna och exportera till Excel"><i class="fa-solid fa-file-excel"></i> Data</button>
       <span class="menu-sep"></span>
       <button type="button" id="themeToggle" class="theme-btn" title="Byt tema"><i class="fa-solid fa-sun"></i></button>
     </nav>
     <div class="filterbar">
+      <div class="searchbox" id="searchBox"></div>
       <div class="dropdown" id="ddCats">
         <button type="button" class="dd-btn"></button>
         <div class="dd-panel" hidden></div>
@@ -53,6 +55,8 @@
   <script src="places.js"></script>
   <script src="changes.js"></script>
   <script src="import.js"></script>
+  <script src="excel.js"></script>
+  <script src="search.js"></script>
   <!-- Ruttplanering är avstängd för tillfället. Slå på genom att avkommentera:
   <script src="route.js"></script>
   -->

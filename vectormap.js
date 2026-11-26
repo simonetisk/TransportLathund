@@ -124,39 +124,118 @@ function swedishStyle(style, styleName) {
   return style;
 }
 
+// ---- Bara Sverige ----
+// Kartdata hämtas bara inom en ruta runt Sverige (samma som SWEDEN_BOUNDS i app.js), så att
+// inga rutor för övriga Europa laddas ner. Källorna i stilen pekar annars på hela världen
+// via en TileJSON-länk; den hämtas här och läggs in direkt i stilen med gränsen satt.
+const SWEDEN_BBOX_ARR = [10.4, 54.9, 24.4, 69.2];   // väst, syd, öst, nord
+async function limitToSweden(style) {
+  await Promise.all(Object.values(style.sources).map(async src => {
+    if (src.url) {
+      const r = await fetch(src.url);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const tj = await r.json();
+      delete src.url;
+      for (const k of ['tiles', 'minzoom', 'maxzoom', 'attribution', 'scheme', 'tileSize']) if (tj[k] != null && src[k] == null) src[k] = tj[k];
+    }
+    if (src.tiles) src.bounds = SWEDEN_BBOX_ARR;
+  }));
+  return style;
+}
+
+// ---- Prestanda ----
+// Vektorkartor ritas av grafikkortet (WebGL). Saknar datorn grafikacceleration ritar webbläsaren
+// i stället med processorn, och då blir kartan seg. Det kontrolleras här en gång; i så fall
+// används den enklare bildkartan (reservkartan) direkt.
+let glCheck = null;
+function hasFastWebGL() {
+  if (glCheck === null) {
+    try {
+      const c = document.createElement('canvas');
+      const opts = { failIfMajorPerformanceCaveat: true };
+      glCheck = !!(c.getContext('webgl2', opts) || c.getContext('webgl', opts));
+    } catch { glCheck = false; }
+  }
+  return glCheck;
+}
+const VECTOR_TIMEOUT = 12000;   // ms: har kartan inte kommit igång på så lång tid används reservkartan
+
+// Kort meddelande nere i mitten som försvinner av sig själv
+function mapNotice(text) {
+  const n = document.createElement('div');
+  n.className = 'map-notice';
+  n.textContent = text;
+  document.body.append(n);
+  setTimeout(() => n.classList.add('hide'), 7000);
+  setTimeout(() => n.remove(), 7600);
+}
+
 // Leaflet-lager som laddar MapLibre + stilen när det läggs på kartan.
+// Går det inte (ingen anslutning, ingen grafikacceleration, för långsamt) visas reservkartan
+// (sätts av app.js med setFallback) i stället, med ett kort meddelande.
 const VectorBaseLayer = L.Layer.extend({
   initialize(styleName) { this._styleName = styleName; },
+  setFallback(layer) { this._fallback = layer; return this; },
+
   onAdd(map) {
+    this._map = map;
     this._active = true;
     if (this._gl) { this._gl.addTo(map); return; }
-    Promise.all([loadVectorLibs(), fetch(`${OFM}/${this._styleName}`).then(r => r.json())])
+    if (this._failed) { this._useFallback(null); return; }
+    if (!hasFastWebGL()) {
+      this._useFallback('Datorn saknar grafikacceleration, så en enklare karta används för att sidan ska gå snabbt.');
+      return;
+    }
+    clearTimeout(this._timer);
+    this._timer = setTimeout(() => {
+      if (!this._ready) this._useFallback('Kartan laddades för långsamt, så en enklare karta används.');
+    }, VECTOR_TIMEOUT);
+
+    Promise.all([loadVectorLibs(), fetch(`${OFM}/${this._styleName}`).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }).then(limitToSweden)])
       .then(([, style]) => {
-        if (this._gl) return;
+        if (this._gl || this._failed) return;
         this._gl = L.maplibreGL({
           style: swedishStyle(style, this._styleName),
-          attribution: '<a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> &copy; OpenMapTiles &copy; OpenStreetMap-bidragsgivare'
+          attribution: '<a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> &copy; OpenMapTiles &copy; OpenStreetMap-bidragsgivare',
+          // Lättare att rita på långsamma datorer:
+          fadeDuration: 0,                                   // ingen tonande övergång för etiketter
+          pixelRatio: Math.min(window.devicePixelRatio || 1, 1.5),   // inte full upplösning på högupplösta skärmar
+          maxTileCacheSize: 400,                             // fler rutor sparas i minnet (mindre omladdning vid zoom/panorering)
+          refreshExpiredTiles: false,                        // ladda inte om rutor bara för att de blivit gamla
+          padding: 0.1                                       // ritar lite mindre utanför skärmkanten (standard 0.15)
         });
         if (this._active) this._gl.addTo(map);
+        const gl = this._gl.getMaplibreMap();
+        gl.once('load', () => { this._ready = true; clearTimeout(this._timer); });
         // Vissa stilar pekar på ikoner som saknas; ersätt med en tom bild i stället för varningar
-        this._gl.getMaplibreMap().on('styleimagemissing', e => {
-          const gl = this._gl.getMaplibreMap();
+        gl.on('styleimagemissing', e => {
           if (!gl.hasImage(e.id)) gl.addImage(e.id, { width: 1, height: 1, data: new Uint8Array(4) });
         });
       })
       .catch(err => {
         console.error(err);
-        if (typeof uiAlert === 'function') uiAlert('Vektorkartan kunde inte laddas (kräver internet).\n\n' + err.message);
+        this._useFallback('Vektorkartan kunde inte laddas (dålig eller ingen anslutning), så en enklare karta används.');
       });
   },
+
   onRemove(map) {
     this._active = false;
+    clearTimeout(this._timer);
     if (this._gl) map.removeLayer(this._gl);
+    if (this._fallback && map.hasLayer(this._fallback)) map.removeLayer(this._fallback);
+  },
+
+  // Visa reservkartan i stället (gäller resten av besöket för den här kartan)
+  _useFallback(message) {
+    this._failed = true;
+    clearTimeout(this._timer);
+    if (this._gl && this._map) { this._map.removeLayer(this._gl); this._gl = null; }
+    if (this._active && this._fallback && this._map && !this._map.hasLayer(this._fallback)) this._fallback.addTo(this._map);
+    if (message) mapNotice(message);
   }
 });
 
 const VECTOR_LAYERS = {
-  'Vektor mörk (svenska)': new VectorBaseLayer('dark'),
-  'Vektor ljus (svenska)': new VectorBaseLayer('positron'),
-  'Vektor detaljerad (svenska)': new VectorBaseLayer('liberty')
+  'Vektor mörk': new VectorBaseLayer('dark'),
+  'Vektor ljus': new VectorBaseLayer('positron')
 };
